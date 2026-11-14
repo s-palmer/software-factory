@@ -14,6 +14,7 @@ ticket -> scoping -> design -> test_writing -> implementing -> reviewing -> brow
 - **One task per ticket.** `factory add --ticket PROJ-12 --after PROJ-11`. A task starts when its blockers are merged.
 - **One agent per stage**, each with its own prompt, tools, budget and model (by default Fable for judgement stages, Opus for building).
 - **Checks between stages.** Output must match a schema. Lint, type check and tests are compared with the merge base. New tests must fail before the change, and are then locked.
+- **Several tasks at once** (`maxParallelTasks`, default 3). Each has its own worktree; the local app, the merge-base checkout and writes to the shared repository are taken in turn.
 - **Failures loop back** to `implementing` with the failure as feedback. Three failures in a row escalate.
 - **No questions to people.** A decider agent answers the agents' questions, and escalates only for money, legal text, security or stored data.
 - **A browser check** for visible changes. An agent checks each acceptance criterion in your running app and takes a screenshot. The factory then photographs the same criteria on the base branch, so the dashboard shows each criterion before and after. Screenshots stay with the task and never go into the repository.
@@ -139,6 +140,7 @@ Close the window, then set `app.browserProfile` to that folder. The browser chec
 | `sandbox.allowedDomains`, `sandbox.allowRead` | Hosts and folders the agents' commands may reach |
 | `verify` | Runtime verification for React UI |
 | `policy`, `maxAttempts` | High-risk paths and size limits; failures before a task escalates |
+| `maxParallelTasks` | How many tasks run at once (default 3). One browser check at a time uses the local app; the others wait for it |
 
 Environment variables override single fields: `FACTORY_REPO`, `FACTORY_CONFIG`, `FACTORY_HOME` (default `~/.factory/<repo>`), `FACTORY_BASE`, `FACTORY_TEST`, `FACTORY_BROWSER_PROFILE`, `FACTORY_AUTOSTART=1`, `API_PORT`, and others in `server/config.ts`. The CLI uses `FACTORY_URL` and `FACTORY_ACTOR`.
 

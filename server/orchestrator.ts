@@ -65,8 +65,11 @@ export type PrStatus = {
 export interface Effects {
   claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string> }): Promise<ClaudeResult>;
   createWorktree(task: Task): Promise<{ branch: string; worktree: string }>;
-  /** The project folder of a clean checkout at the merge base, with dependencies installed. */
-  baseCheckout(worktree: string): Promise<string>;
+  /**
+   * Runs `fn` on a clean checkout of the merge base, with dependencies installed. The checkout is shared, so it is
+   * held until `fn` finishes: keep `fn` to the work that needs it.
+   */
+  withBaseCheckout<T>(worktree: string, fn: (dir: string) => Promise<T>): Promise<T>;
   /** Files git does not track yet, relative to the worktree. */
   untrackedFiles(worktree: string): Promise<string[]>;
   /** A GitHub issue's text, for the prompts. */
@@ -120,6 +123,8 @@ export interface OrchestratorConfig {
   isolation?: IsolationConfig | undefined;
   /** Runtime verification of UI units, when the project has it. */
   verify?: VerifyContext | undefined;
+  /** How many tasks the loop works on at once. Default 1. */
+  maxParallel?: number | undefined;
   /** The branch PRs target, named in the review and PR prompts (default "main"). */
   baseBranch?: string;
   tickMs: number;
@@ -136,7 +141,8 @@ const AGENT_STAGES: ReadonlySet<TaskStatus> = new Set(["scoping", "design", "tes
 export class Orchestrator {
   private readonly busy = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private ticking = false;
+  /** Tasks with a step in progress, started by the loop. */
+  private readonly inflight = new Set<string>();
 
   constructor(
     private readonly db: FactoryDb,
@@ -166,22 +172,31 @@ export class Orchestrator {
     return queue.find((id) => !this.busy.has(id)) ?? null;
   }
 
-  /** One step of one task. Returns false when nothing was ready. */
+  /**
+   * Starts a step for each free slot (up to `maxParallel` tasks at once), each on the ready task that waited longest,
+   * and waits for the ones it started. Returns false when nothing was ready. Overlapping ticks only fill free slots.
+   * Shared resources are leased or locked where they are used: the local app (the env lease), the merge-base checkout
+   * and writes to the shared repository (locks in the effects).
+   */
   async tick(): Promise<boolean> {
-    if (this.ticking) return false;
     // The kill switch: a halted factory takes no steps.
     if (await this.db.getHalt()) return false;
-    this.ticking = true;
-    try {
-      // A retro runs beside the loop, one at a time, so it never holds up a task.
-      if (!this.retroRunning) void this.retroNext();
+    // A retro runs beside the loop, one at a time, so it never holds up a task.
+    if (!this.retroRunning) void this.retroNext();
+    const started: Array<Promise<void>> = [];
+    while (this.inflight.size < (this.config.maxParallel ?? 1)) {
       const id = await this.nextTask();
-      if (!id) return false;
-      await this.step(id);
-      return true;
-    } finally {
-      this.ticking = false;
+      if (!id || this.inflight.has(id)) break;
+      this.inflight.add(id);
+      started.push(this.step(id).finally(() => this.inflight.delete(id)));
     }
+    await Promise.all(started);
+    return started.length > 0;
+  }
+
+  /** How many tasks have a step in progress, out of how many may. */
+  get load(): { running: number; max: number } {
+    return { running: this.inflight.size, max: this.config.maxParallel ?? 1 };
   }
 
   async step(taskId: string): Promise<void> {
@@ -562,7 +577,7 @@ export class Orchestrator {
       // The same criteria on the merge base, for a before-and-after view. Evidence, not a gate.
       await this.effects.env.stop(pid);
       pid = null;
-      pid = await this.captureBefore(task, output.criteria.map((c) => c.criterion), browserUrl);
+      await this.captureBefore(task, output.criteria.map((c) => c.criterion), browserUrl);
       return await this.move(task, afterSuccess("browser_check"));
     } finally {
       if (pid !== null) await this.effects.env.stop(pid);
@@ -571,30 +586,33 @@ export class Orchestrator {
   }
 
   /**
-   * Starts the app on the merge base and lets a capture-only agent photograph the criteria. Returns the app's pid
-   * so the caller stops it. Any failure is recorded and skipped: the task moves on without "before" pictures.
+   * Starts the app on the merge base and lets a capture-only agent photograph the criteria, then stops the app. The
+   * caller holds the env lease. The merge-base checkout is held for the whole capture, so no other task checks out
+   * another commit under the running app. Any failure is recorded and skipped: the task moves on without them.
    */
-  private async captureBefore(task: Task, criteria: string[], browserUrl: string): Promise<number | null> {
-    if (criteria.length === 0) return null;
-    let pid: number | null = null;
+  private async captureBefore(task: Task, criteria: string[], browserUrl: string): Promise<void> {
+    if (criteria.length === 0) return;
     try {
-      const base = await this.effects.baseCheckout(task.worktree!);
-      const logPath = join(this.config.artifactRoot, "tasks", task.id, `env-before-${this.now().getTime()}.log`);
-      pid = this.effects.env.start(base, logPath);
-      await this.db.updateLeasePid(ENV_LEASE, pid, logPath);
-      const started = pid;
-      await waitUntil(async () => (await this.effects.env.isUp()) || !this.effects.env.isRunning(started), this.config.envStartTimeoutMs);
-      if (!(await this.effects.env.isUp())) {
-        await this.db.recordEvent(task.id, "before_capture_skipped", { reason: `The app did not start on the merge base. Log: ${logPath}` });
-        return pid;
-      }
-      const result = await this.runAgent(task, "browser_check", { kind: "before", browserUrl, build: (ctx) => beforeCaptureCall(task, ctx, criteria) });
-      const recorded = await this.collectScreenshots(task, result.screenshotDir, result.output, "BEFORE");
-      if (recorded === 0) await this.db.recordEvent(task.id, "before_capture_skipped", { reason: result.ok ? "No screenshots were taken on the merge base" : `The run stopped: ${result.subtype}` });
+      await this.effects.withBaseCheckout(task.worktree!, async (base) => {
+        const logPath = join(this.config.artifactRoot, "tasks", task.id, `env-before-${this.now().getTime()}.log`);
+        const pid = this.effects.env.start(base, logPath);
+        try {
+          await this.db.updateLeasePid(ENV_LEASE, pid, logPath);
+          await waitUntil(async () => (await this.effects.env.isUp()) || !this.effects.env.isRunning(pid), this.config.envStartTimeoutMs);
+          if (!(await this.effects.env.isUp())) {
+            await this.db.recordEvent(task.id, "before_capture_skipped", { reason: `The app did not start on the merge base. Log: ${logPath}` });
+            return;
+          }
+          const result = await this.runAgent(task, "browser_check", { kind: "before", browserUrl, build: (ctx) => beforeCaptureCall(task, ctx, criteria) });
+          const recorded = await this.collectScreenshots(task, result.screenshotDir, result.output, "BEFORE");
+          if (recorded === 0) await this.db.recordEvent(task.id, "before_capture_skipped", { reason: result.ok ? "No screenshots were taken on the merge base" : `The run stopped: ${result.subtype}` });
+        } finally {
+          await this.effects.env.stop(pid);
+        }
+      });
     } catch (error) {
       await this.db.recordEvent(task.id, "before_capture_skipped", { reason: (error as Error).message.slice(0, 500) });
     }
-    return pid;
   }
 
   /**

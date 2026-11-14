@@ -128,16 +128,30 @@ describe("git and the gate, against a real repository", () => {
     ]);
   });
 
+  it("lets one task at a time use the merge-base checkout", async () => {
+    const fx = createEffects(config);
+    const { worktree } = await fx.createWorktree(task);
+    const log: string[] = [];
+    const use = (name: string) =>
+      fx.withBaseCheckout(worktree, async () => {
+        log.push(`start ${name}`);
+        await new Promise((r) => setTimeout(r, 20));
+        log.push(`end ${name}`);
+      });
+    await Promise.all([use("a"), use("b")]);
+    expect(log).toEqual(["start a", "end a", "start b", "end b"]);
+  });
+
   it("reinstalls the base checkout when the install command changes, not on every use", async () => {
     const count = join(config.home, "installs.txt");
     const installs = () => (existsSync(count) ? readFileSync(count, "utf8").split("\n").filter(Boolean) : []);
     const withInstall = (tag: string) => createEffects({ ...config, installCommand: ["sh", "-c", `echo ${tag} >> ${JSON.stringify(count)}`] });
     const { worktree } = await withInstall("a").createWorktree(task);
     const before = installs().length;
-    await withInstall("a").baseCheckout(worktree);
-    await withInstall("a").baseCheckout(worktree);
+    await withInstall("a").withBaseCheckout(worktree, async (checkout) => checkout);
+    await withInstall("a").withBaseCheckout(worktree, async (checkout) => checkout);
     expect(installs().length - before).toBe(1);
-    await withInstall("b").baseCheckout(worktree);
+    await withInstall("b").withBaseCheckout(worktree, async (checkout) => checkout);
     expect(installs().slice(-1)).toEqual(["b"]);
   });
 

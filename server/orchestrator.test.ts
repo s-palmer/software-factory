@@ -71,9 +71,9 @@ class Fakes implements Effects {
     return { results, missing: opts.units.filter((u) => !results.some((r) => r.unit === u)) };
   }
   baseCheckouts = 0;
-  async baseCheckout() {
+  async withBaseCheckout<T>(_w: string, fn: (dir: string) => Promise<T>): Promise<T> {
     this.baseCheckouts++;
-    return "/tmp/wt/base";
+    return fn("/tmp/wt/base");
   }
   async untrackedFiles(worktree: string) {
     return existsSync(worktree) ? readdirSync(worktree).filter((f) => !f.startsWith(".")) : [];
@@ -757,6 +757,49 @@ describe("failures and the loop", () => {
     expect((await drive(task.id)).at(-1)).toBe("escalated");
     expect((await get(task.id)).context.escalation).toBe("The factory failed: tsc crashed");
     expect(await db.hasRunningAgentRun(task.id)).toBe(false);
+  });
+
+  it("works on several tasks at once, up to the limit", async () => {
+    make({ maxParallel: 2 });
+    let running = 0;
+    let most = 0;
+    const claude = fakes.claude.bind(fakes);
+    fakes.claude = async (call, opts) => {
+      running++;
+      most = Math.max(most, running);
+      await new Promise((r) => setTimeout(r, 20));
+      running--;
+      return claude(call, opts);
+    };
+    const tasks = await Promise.all(["A", "B", "C"].map((title) => newTask({ title })));
+    for (let i = 0; i < 6; i++) await orch.tick();
+    // Two agent runs overlapped, and never three.
+    expect(most).toBe(2);
+    const states = await Promise.all(tasks.map(async (t) => (await get(t.id)).status));
+    expect(states.every((s) => s !== "backlog")).toBe(true);
+    expect(orch.load).toEqual({ running: 0, max: 2 });
+  });
+
+  it("lets only one task use the local app: the other browser check waits", async () => {
+    make({ maxParallel: 2 });
+    const a = await newTask({ title: "A" });
+    const b = await newTask({ title: "B" });
+    for (const t of [a, b]) await db.moveTask(t.id, "backlog", "browser_check");
+    await db.updateTask(a.id, { worktree: "/tmp/wt/a" });
+    await db.updateTask(b.id, { worktree: "/tmp/wt/b" });
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const claude = fakes.claude.bind(fakes);
+    fakes.claude = async (call, opts) => {
+      if (call.prompt.startsWith("# Phase: browser check")) await held;
+      return claude(call, opts);
+    };
+    const tick = orch.tick();
+    await new Promise((r) => setTimeout(r, 50));
+    const waiting = [await get(a.id), await get(b.id)].find((t) => t.context.envWait);
+    expect(waiting?.context.envWait).toMatch(/Another task is using the local app/);
+    release();
+    await tick;
   });
 
   it("interleaves tasks: each tick moves the one that waited longest", async () => {

@@ -97,7 +97,7 @@ export function createApp(
 
   /* ---------------------------- Orchestrator loop ---------------------------- */
 
-  app.get("/api/orchestrator", (c) => c.json({ available: Boolean(orchestrator), running: orchestrator?.running ?? false }));
+  app.get("/api/orchestrator", (c) => c.json({ available: Boolean(orchestrator), running: orchestrator?.running ?? false, ...(orchestrator ? { load: orchestrator.load } : {}) }));
 
   app.put("/api/orchestrator", async (c) => {
     if (!orchestrator) return c.json({ error: "The orchestrator is not configured on this server" }, 503);

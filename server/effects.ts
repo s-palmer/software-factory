@@ -16,6 +16,7 @@ import type { FileChange } from "../shared/risk";
 import { runClaude } from "./claude";
 import type { EnvController, Effects, GateResult, GateStep, PrStatus, VerifyRun } from "./orchestrator";
 import { LOCKFILES } from "../shared/config";
+import { Lock } from "./lock";
 
 export interface EffectsConfig {
   /** Git repository root (the one the factory makes worktrees of). */
@@ -175,13 +176,26 @@ export function createEffects(config: EffectsConfig): Effects {
     return must(["git", "merge-base", "HEAD", baseRef], cwd);
   }
 
-  /** The shared base worktree, detached on `sha`, with dependencies installed when the lockfile changed. Self-repairs. */
+  // Tasks run in parallel. Writes to the shared repository's refs and worktree list (fetch, worktree add, push)
+  // take turns, and so does the one merge-base checkout: from checking out a commit until its user is finished.
+  const gitLock = new Lock();
+  const baseLock = new Lock();
+  const git = (args: string[], cwd: string) => gitLock.run(() => must(["git", ...args], cwd));
+
+  /** Runs `fn` on the merge-base checkout at `sha`, holding it so no other task checks out another commit meanwhile. */
+  function withBase<T>(sha: string, fn: (dir: string) => Promise<T>): Promise<T> {
+    return baseLock.run(async () => fn(await prepareBase(sha)));
+  }
+
+  /** The shared base worktree, detached on `sha`, with dependencies installed when the lockfile changed. Self-repairs. Call it through `withBase`. */
   async function prepareBase(sha: string): Promise<string> {
     if (existsSync(baseRoot) && !existsSync(join(baseRoot, ".git"))) rmSync(baseRoot, { recursive: true, force: true });
-    await run(["git", "worktree", "prune"], config.repo);
     if (!existsSync(baseRoot)) {
       mkdirSync(config.home, { recursive: true });
-      await must(["git", "worktree", "add", "--detach", baseRoot, sha], config.repo);
+      await gitLock.run(async () => {
+        await run(["git", "worktree", "prune"], config.repo);
+        await must(["git", "worktree", "add", "--detach", baseRoot, sha], config.repo);
+      });
     } else {
       await must(["git", "checkout", "--detach", "--force", sha], baseRoot);
     }
@@ -300,12 +314,14 @@ export function createEffects(config: EffectsConfig): Effects {
       const slug = (key ? `${key}-` : "") + task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
       const branch = `factory/${slug || task.id.slice(0, 8)}-${task.id.slice(0, 6)}`;
       const root = join(config.home, "worktrees", task.id);
-      await must(["git", "fetch", config.remote, config.base], config.repo);
+      await git(["fetch", config.remote, config.base], config.repo);
       if (!existsSync(join(root, ".git"))) {
         rmSync(root, { recursive: true, force: true });
-        await run(["git", "worktree", "prune"], config.repo);
         mkdirSync(join(config.home, "worktrees"), { recursive: true });
-        await must(["git", "worktree", "add", "-B", branch, root, baseRef], config.repo);
+        await gitLock.run(async () => {
+          await run(["git", "worktree", "prune"], config.repo);
+          await must(["git", "worktree", "add", "-B", branch, root, baseRef], config.repo);
+        });
       }
       // A new worktree has no dependencies, so tests and hooks would fail.
       await must(config.installCommand, project(root), { timeoutMs: 30 * 60_000 });
@@ -314,8 +330,8 @@ export function createEffects(config: EffectsConfig): Effects {
 
     fileExists: (worktree, path) => existsSync(join(worktree, path)),
 
-    async baseCheckout(worktree) {
-      return prepareBase(await mergeBase(worktree));
+    async withBaseCheckout(worktree, fn) {
+      return withBase(await mergeBase(worktree), fn);
     },
 
     async untrackedFiles(worktree) {
@@ -402,8 +418,8 @@ export function createEffects(config: EffectsConfig): Effects {
       if (types.ok) steps.push({ name: "typecheck", ok: true, output: "" });
       else if (types.errors.length === 0) steps.push({ name: "typecheck", ok: false, output: tail(types.output) }); // failed without parseable errors
       else {
-        const baseDir = await prepareBase(mb);
-        const fresh = newTypeErrors(types.errors, (await typeErrors(baseDir)).errors);
+        const baseErrors = await withBase(mb, async (baseDir) => (await typeErrors(baseDir)).errors);
+        const fresh = newTypeErrors(types.errors, baseErrors);
         const output = fresh.slice(0, 30).map((e) => e.line).join("\n") + (fresh.length > 30 ? `\n... and ${fresh.length - 30} more` : "");
         steps.push({ name: "typecheck", ok: fresh.length === 0, output });
       }
@@ -412,9 +428,10 @@ export function createEffects(config: EffectsConfig): Effects {
       const tests = await failingTestFiles(worktree, runner.changed(mb));
       if (tests.ok) steps.push({ name: "tests", ok: true, output: "" });
       else {
-        const baseDir = await prepareBase(mb);
-        const onBase = tests.failed.filter((f) => existsSync(join(baseDir, f)));
-        const baseRun = onBase.length ? await failingTestFiles(baseDir, onBase) : { failed: [] as string[] };
+        const baseRun = await withBase(mb, async (baseDir) => {
+          const onBase = tests.failed.filter((f) => existsSync(join(baseDir, f)));
+          return onBase.length ? await failingTestFiles(baseDir, onBase) : { failed: [] as string[] };
+        });
         const fresh = tests.failed.filter((f) => !baseRun.failed.includes(f));
         steps.push({ name: "tests", ok: fresh.length === 0, output: fresh.length ? `Failing: ${fresh.join(", ")}\n${tail(tests.output)}` : "" });
       }
@@ -443,11 +460,11 @@ export function createEffects(config: EffectsConfig): Effects {
       if (staged.code !== 0) await must(["git", "commit", "--no-verify", "-m", message], worktree);
       // After a move onto the base the branch no longer contains the remote commits; the lease refuses the
       // push if someone else pushed in the meantime.
-      await must(["git", "push", ...(force ? ["--force-with-lease"] : []), "-u", config.remote, `HEAD:refs/heads/${branch}`], worktree);
+      await git(["push", ...(force ? ["--force-with-lease"] : []), "-u", config.remote, `HEAD:refs/heads/${branch}`], worktree);
     },
 
     async syncWithBase(worktree) {
-      await must(["git", "fetch", config.remote, config.base], worktree);
+      await git(["fetch", config.remote, config.base], worktree);
       const mb = await mergeBase(worktree);
       const tip = await must(["git", "rev-parse", baseRef], worktree);
       if (mb === tip) return { upToDate: true, conflicts: [] };
