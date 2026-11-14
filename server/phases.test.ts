@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Task } from "../shared/api";
+import { homePathDirs } from "./isolation";
 import { type AgentStage, DEFAULT_SKILLS_DIR, deciderCall, denyTools, PHASE_SKILLS, type PhaseContext, phaseCall } from "./phases";
 
 // Only the fields the prompt builders read.
@@ -149,6 +150,13 @@ describe("replaceable skills", () => {
     expect(call.addDirs).toEqual(["/code/app/.claude/skills"]);
     // A stage left out keeps the default files, in the project's folder.
     expect(phaseCall("scoping", task, { ...ctx, skillsDir: "/code/app/.claude/skills", stageSkills: { design: ["x.md"] } }).prompt).toContain("`/code/app/.claude/skills/to-spec/SKILL.md`");
+  });
+});
+
+describe("sandbox read access for PATH", () => {
+  it("allows every PATH folder under the home folder, so tools can find sh and node", () => {
+    expect(homePathDirs("/Users/u/.duckdb/cli/latest:/Users/u/.local/bin:/usr/bin:/bin:/Users/u2/bin", "/Users/u")).toEqual(["/Users/u/.duckdb/cli/latest", "/Users/u/.local/bin"]);
+    expect(homePathDirs(undefined, "/Users/u")).toEqual([]);
   });
 });
 

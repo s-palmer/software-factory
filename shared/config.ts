@@ -145,6 +145,12 @@ export const ProjectConfig = z.object({
       url: z.string().url().default("http://localhost:5173"),
       healthUrls: z.array(z.string().url()).default([]),
       startTimeoutMs: z.number().int().positive().default(300_000),
+      /**
+       * A Chrome profile folder where a person signed in to the app. The browser check then runs in Google Chrome on
+       * that profile, signed in. Use it when a saved cookie cannot carry the session (for example a device-bound
+       * sign-in). Without it the check runs signed out in a new, empty profile.
+       */
+      browserProfile: z.string().min(1).optional(),
     })
     .prefault({}),
   /** Failed attempts in a row before a task escalates. */

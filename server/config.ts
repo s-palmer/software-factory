@@ -87,11 +87,15 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
   const browserLibs = env.FACTORY_BROWSER_LIBS ?? join(homedir(), ".local/share/factory/chromium-libs");
   const libPath = [join(browserLibs, "usr/lib/x86_64-linux-gnu"), join(browserLibs, "lib/x86_64-linux-gnu")].filter(existsSync).join(":");
   const chromium = env.FACTORY_CHROMIUM ?? chromiumPath();
+  const profileSetting = env.FACTORY_BROWSER_PROFILE ?? project.app.browserProfile;
+  const browserProfile = profileSetting ? resolve(profileSetting.replace(/^~(?=\/)/, homedir())) : null;
   // The browser tool server is pinned in package.json and starts outside the repository, so it never reads the project's files.
+  // A signed-in profile runs in Google Chrome: Chrome encrypts its saved sign-in with a key only Chrome can read.
   const mcpBin = join(FACTORY_ROOT, "node_modules/.bin/playwright-mcp");
+  const browserArgs = browserProfile ? `--user-data-dir ${JSON.stringify(browserProfile)}` : `--isolated --executable-path ${JSON.stringify(chromium)}`;
   const browserMcp = {
     command: "sh",
-    args: ["-c", `cd ${JSON.stringify(home)} && exec ${JSON.stringify(mcpBin)} --headless --isolated --ignore-https-errors --executable-path ${JSON.stringify(chromium)}`],
+    args: ["-c", `cd ${JSON.stringify(home)} && exec ${JSON.stringify(mcpBin)} --headless --ignore-https-errors ${browserArgs}`],
     ...(libPath ? { env: { LD_LIBRARY_PATH: libPath } } : {}),
   };
   const start = env.FACTORY_ENV_START ?? project.app.start;

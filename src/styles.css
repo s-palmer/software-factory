@@ -39,6 +39,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .task-page header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .task-page__body { display: grid; grid-template-columns: 1fr minmax(260px, 360px); gap: 24px; align-items: start; }
+/* Grid items may shrink below their content, so a long log scrolls in its box instead of widening the column. */
+.task-page__body > *, .home > * { min-width: 0; }
 .gallery__preview { margin: 0 0 12px; background: #fff; padding: 8px; border-radius: 8px; }
 .gallery__preview img { width: 100%; border: 1px solid #ddd; }
 .gallery__grid { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
@@ -114,9 +116,10 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 
 /* ---- Escalation ---- */
 .pipeline__now[data-escalated="true"] strong { color: #a40e26; }
-.decision { background: #fff5f5; border-left: 4px solid #cf222e; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; }
+.decision { background: #fff5f5; border-left: 4px solid #cf222e; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; min-width: 0; }
 .decision h3 { margin: 0 0 6px; font-size: 15px; }
-.decision__reason { margin: 0 0 8px; white-space: pre-wrap; }
+.decision__reason { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.decision__log { margin: 6px 0 0; max-height: 240px; overflow: auto; white-space: pre; background: #fff; border: 1px solid #f0d0d0; border-radius: 4px; padding: 8px; font-size: 12px; line-height: 1.4; }
 .decision__reason--missing { color: #777; font-style: italic; }
 .decision__questions-title { margin: 8px 0 4px; font-weight: 600; font-size: 13px; }
 .decision__questions { margin: 0 0 8px; padding-left: 20px; }

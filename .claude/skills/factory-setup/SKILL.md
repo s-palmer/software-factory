@@ -34,6 +34,7 @@ Read the repository's `package.json`, its README and its CI configuration. Then 
 | `commands.typecheck` | Must print `tsc` errors. A project script that wraps `tsc --noEmit` is fine |
 | `commands.lint` | Gets the changed files appended, so it must accept file paths. Remove it if no linter exists |
 | `app.start`, `app.url`, `app.healthUrls` | The command that starts the app locally and the URL it answers on. Without `start`, any visible change escalates at the browser check |
+| `app.browserProfile` | If the app needs a sign-in, a Chrome profile folder where the person signed in. The README says how to make one; only the person can sign in |
 | `sandbox.allowedDomains` | Hosts the tests must reach. Agents' shell commands have no network otherwise |
 | `sandbox.allowRead` | Folders outside the worktree the tools must read, if a test run fails with `EPERM` |
 | `projectDir` | The app's folder in a monorepo, `""` otherwise |

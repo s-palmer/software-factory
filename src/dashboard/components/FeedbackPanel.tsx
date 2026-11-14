@@ -54,7 +54,7 @@ export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifac
           <h3>
             Escalated{context.escalatedFrom && <> from {statusLabel(context.escalatedFrom)}</>}
           </h3>
-          {context.escalation ? <p className="decision__reason">{context.escalation}</p> : <p className="decision__reason decision__reason--missing">No reason was recorded.</p>}
+          {context.escalation ? <EscalationReason text={context.escalation} /> : <p className="decision__reason decision__reason--missing">No reason was recorded.</p>}
           {questions.length > 0 && (
             <>
               <p className="decision__questions-title">Open questions</p>
@@ -108,3 +108,20 @@ export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifac
     </section>
   );
 }
+
+/**
+ * The reason a task stopped. The first line is the reason; anything after it (often the end of a log) goes in a
+ * scrollable box, so long paths and log lines stay inside the card. The text content is the reason, word for word.
+ */
+function EscalationReason({ text }: { text: string }) {
+  const cut = text.indexOf("\n");
+  if (cut === -1) return <p className="decision__reason">{text}</p>;
+  return (
+    <div className="decision__reason">
+      <span>{text.slice(0, cut)}</span>
+      {"\n"}
+      <pre className="decision__log">{text.slice(cut + 1)}</pre>
+    </div>
+  );
+}
+

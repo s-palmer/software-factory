@@ -11,6 +11,9 @@ const record: FeedbackPanelProps["onSubmit"] = (input) => {
   sent.push(input);
 };
 const reason = "Implement failed 3 times: the locked test `AC-2 shows the empty state` still fails (expected 'No tasks', got '').";
+const longLog = `The local app did not start. End of /home/someone/.factory/a-very-long-repository-name/artifacts/tasks/0f3c2a1e-5b7d-4e9a-8c6f-2d1b0a9e8f7c/env-1794667005266.log:
+${Array.from({ length: 40 }, (_, i) => `[indexer] 2026-11-14T14:36:59.${String(i).padStart(3, "0")}Z [DEBUG] node - Running the bulk indexer on /tmp/indexer/app.example.test/catalogue:/ for commit 0123456789abcdef0123456789abcdef01234567`).join("\n")}`;
+
 const escalated: FeedbackPanelProps = {
   status: "escalated",
   context: {
@@ -81,6 +84,12 @@ registerUnit<FeedbackPanelProps>({
       description: "Probe: no screenshot picker when there are no screenshots.",
       props: { ...escalated, artifacts: [] },
     },
+    {
+      id: "long-log",
+      probe: true,
+      description: "Probe: a reason followed by a long log with unbroken paths; the log goes in a scrollable box under the first line.",
+      props: { ...escalated, context: { ...escalated.context, escalation: longLog } },
+    },
     { id: "server-error", probe: true, description: "Probe: an API error is shown as an alert.", props: { ...escalated, error: "Only escalated tasks take a decision" } },
   ],
   invariants: [
@@ -102,6 +111,16 @@ registerUnit<FeedbackPanelProps>({
         if (props.status !== "escalated") return true;
         const text = root.querySelector(".decision__reason")?.textContent;
         return props.context?.escalation ? text === props.context.escalation || `text=${text}` : root.querySelector(".decision__reason--missing") !== null;
+      },
+    },
+    {
+      id: "log-in-a-box",
+      description: "A reason with more than one line shows its first line as text and the rest in a scrollable log box",
+      check: ({ root, props }) => {
+        const text = props.context?.escalation ?? "";
+        const pre = root.querySelector(".decision__log");
+        if (!text.includes("\n")) return pre === null || "log box for a one-line reason";
+        return pre?.textContent === text.slice(text.indexOf("\n") + 1) || `log box text=${pre?.textContent?.slice(0, 60)}`;
       },
     },
     {

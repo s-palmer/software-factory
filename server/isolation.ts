@@ -19,6 +19,15 @@ export interface IsolationConfig {
   allowRead: string[];
 }
 
+/**
+ * The PATH folders under the home folder. A process finds `sh` or `node` by trying each PATH folder in turn, and the
+ * sandbox answers a denied folder with EPERM, which stops the search before it reaches /bin. So each one must be
+ * readable, or `pnpm test` cannot start its script shell.
+ */
+export function homePathDirs(path: string | undefined, home: string): string[] {
+  return (path ?? "").split(":").filter((p) => p.startsWith(`${home}/`));
+}
+
 /** Folders under the home folder that Node, package managers and test tools read. Found once. */
 let toolchain: string[] | null = null;
 export function toolchainDirs(): string[] {
@@ -36,6 +45,7 @@ export function toolchainDirs(): string[] {
   const found = [
     dirname(dirname(process.execPath)), // the Node install, such as ~/.nvm/versions/node/v24
     ...bins,
+    ...homePathDirs(process.env.PATH, home),
     join(home, ".gitconfig"),
     join(home, ".config/git"),
     join(home, "Library/Preferences/pnpm"),

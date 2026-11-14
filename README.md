@@ -81,7 +81,7 @@ The factory can check only what your repository lets it check. Go through this l
 2. Tests that run headless with no network (checked). Set `commands.test` to the command that runs your unit tests, and `commands.testRunner` to `vitest` or `jest`. The factory adds the runner's flags so that only the tests a change touches run. Agents run tests in a sandbox with no network, so tests must not call real services. If some tests need a host, list it in `sandbox.allowedDomains`.
 3. A type check that prints `tsc` errors, set in `commands.typecheck`, for example `pnpm exec tsc --noEmit --pretty false`. The gate compares the errors with those on the merge base, so old errors in your code do not block a change. A wrapper that prints only counts makes this check weak.
 4. A linter that takes file paths, if you have one. `commands.lint` gets the changed files appended. Leave it out if you have no linter.
-5. A way to start the app locally, for UI work. `app.start` starts the app from a task's worktree, and every URL in `app.healthUrls` must answer when it is up. Self-signed certificates are fine. The app must use fixed ports, because the factory runs one copy at a time. Without `app.start`, a change with a visible effect escalates at the browser check.
+5. A way to start the app locally, for UI work. `app.start` starts the app from a task's worktree, and every URL in `app.healthUrls` must answer when it is up. Self-signed certificates are fine. The app must use fixed ports, because the factory runs one copy at a time. Without `app.start`, a change with a visible effect escalates at the browser check. If the app needs a sign-in, see `app.browserProfile` below.
 6. An install that uses the lockfile (checked). `commands.install` runs in every new worktree. In a large monorepo the first install takes a few minutes.
 7. Rules for agents. Agents load your `CLAUDE.md`, and the files it imports, as a person's Claude Code session does. Put your conventions there: folder layout, naming, how to test and what not to touch.
 8. Tickets with acceptance criteria. The ticket is the spec, so write down what must be true when the work is done. The scoping agent turns that into testable criteria, and the browser check checks each one.
@@ -287,6 +287,7 @@ The dashboard's Environment page (`/env`, or `factory env` in a terminal) shows 
 | `commands.testRunner` | `vitest` (the default) or `jest` |
 | `app.start` | Starts the task's copy of your app for the browser check. Without it, a change with a visible effect escalates at the browser check |
 | `app.url`, `app.healthUrls` | Where the browser check opens the app, and the URLs that must answer before it starts |
+| `app.browserProfile` | A Chrome profile folder where a person signed in to the app. The browser check then runs in Google Chrome on that profile, signed in. Without it, the check runs signed out. To make one, start the app, run `pnpm exec playwright open --channel chrome --ignore-https-errors --user-data-dir ~/.factory/browser-profile <app url>` from the factory folder, sign in, and close the window. Chrome locks a profile while a window has it open |
 | `maxAttempts` | Failed attempts in a row before a task escalates |
 | `tracker` | `{ "type": "github" }`, or an MCP tracker: `name`, `label`, `server` (an MCP server entry), `tools` (its read tools, or `"*"` for a read-only server), `keyPattern` and `instructions`. `factory init` writes the presets for Jira and Linear |
 | `skills.dir`, `skills.stages` | Your own skills folder, and the skill files for each stage. See [Skills](#skills) |
@@ -309,6 +310,7 @@ Environment variables override the file. They also set where the factory keeps i
 | `FACTORY_AUTOSTART` | off | `1` starts the loop when the server starts |
 | `FACTORY_CLAUDE_COMMAND` | `claude` | The command for agent runs |
 | `FACTORY_CHROMIUM` | Playwright's Chromium | The browser for the browser check |
+| `FACTORY_BROWSER_PROFILE` | the config's `app.browserProfile` | A signed-in Chrome profile for the browser check |
 | `FACTORY_POLICY` | the config's `policy` | A separate policy file |
 | `FACTORY_BASE`, `FACTORY_REMOTE`, `FACTORY_PROJECT_DIR`, `FACTORY_MAX_ATTEMPTS` | the config | Override single fields |
 | `FACTORY_INSTALL`, `FACTORY_SYNC`, `FACTORY_LINT`, `FACTORY_TYPECHECK`, `FACTORY_TEST` | the config | Override single commands |
