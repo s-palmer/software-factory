@@ -183,7 +183,6 @@ describe("git and the gate, against a real repository", () => {
     git(config.repo, "push", "origin", "factory/main");
     const result = await fx.syncWithBase(worktree);
     expect(result).toEqual({ upToDate: false, conflicts: ["src/a.ts"] });
-    const { readFileSync } = await import("node:fs");
     expect(readFileSync(join(worktree, "src", "a.ts"), "utf8")).toMatch(/<<<<<<<[\s\S]*'base'[\s\S]*'task'/);
     expect(readFileSync(join(worktree, "src", "mine.ts"), "utf8")).toBe("export const mine = 1;\n");
     expect(git(worktree, "rev-parse", "HEAD")).toBe(git(config.repo, "rev-parse", "origin/factory/main"));
