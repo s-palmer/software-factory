@@ -154,6 +154,16 @@ describe("factory init", () => {
     expect(readFileSync(join(on, "src/verify/specs/index.ts"), "utf8")).toBe('import "./Cart.verify";\n');
   });
 
+  it("runs a Jest project's tests through its test script, and leaves verification off", async () => {
+    const dir = project({ "package.json": JSON.stringify({ scripts: { test: "jest" }, dependencies: { react: "19" }, devDependencies: { vite: "8", jest: "30", typescript: "5" } }), "pnpm-lock.yaml": "" });
+    const fake = io(dir);
+    await initProject(dir, quiet({ json: true }), fake);
+    const config = readConfig(dir);
+    expect(config.commands).toMatchObject({ test: "pnpm test", testRunner: "jest" });
+    expect(config.verify.enabled).toBe(false);
+    expect(JSON.parse(fake.lines[0]!).checks.find((c: { name: string }) => c.name === "Jest")).toMatchObject({ ok: true });
+  });
+
   it("refuses a folder that is not a git repository", async () => {
     const dir = project({});
     expect(await initProject(dir, quiet(), io(dir, { failing: ["git rev-parse"] }))).toBe(2);

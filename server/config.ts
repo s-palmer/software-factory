@@ -33,6 +33,8 @@ export interface FactoryConfig {
   db: string;
   policy: RiskPolicy;
   tracker: TrackerConfig;
+  /** The PM run's skill files, when the project replaces them. */
+  planningSkills: string[] | undefined;
   /** The Chromium the browser check uses. The server refuses to start the loop when it is missing. */
   chromium: string;
   effects: EffectsConfig;
@@ -40,8 +42,9 @@ export interface FactoryConfig {
 }
 
 /** Reads and validates `factory.config.json` in `repo`. A missing file gives the defaults; an invalid one throws. */
-export function readProjectConfig(repo: string): { file: string | null; config: ProjectConfig } {
-  const file = join(repo, CONFIG_FILE);
+export function readProjectConfig(repo: string, path?: string): { file: string | null; config: ProjectConfig } {
+  const file = path ? resolve(path) : join(repo, CONFIG_FILE);
+  if (path && !existsSync(file)) throw new Error(`FACTORY_CONFIG points to ${file}, which does not exist`);
   if (!existsSync(file)) return { file: null, config: ProjectConfig.parse({}) };
   const parsed = ProjectConfig.safeParse(JSON.parse(readFileSync(file, "utf8")));
   if (!parsed.success) throw new Error(`${file} is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
@@ -76,7 +79,8 @@ export function factoryPaths(env: Env = process.env, cwd = process.cwd()): { rep
 
 export function loadConfig(env: Env = process.env, cwd = process.cwd()): FactoryConfig {
   const { repo, home, db, artifacts } = factoryPaths(env, cwd);
-  const { file, config: project } = readProjectConfig(repo);
+  // FACTORY_CONFIG: a config kept outside the repository, for example to try the factory without adding a file to it.
+  const { file, config: project } = readProjectConfig(repo, env.FACTORY_CONFIG);
   // Fail fast on an invalid policy file: a typo must never silently loosen what needs a person.
   const policy = env.FACTORY_POLICY ? RiskPolicy.parse(JSON.parse(readFileSync(env.FACTORY_POLICY, "utf8"))) : project.policy;
 
@@ -91,6 +95,8 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
     ...(libPath ? { env: { LD_LIBRARY_PATH: libPath } } : {}),
   };
   const start = env.FACTORY_ENV_START ?? project.app.start;
+  // Your own skills replace the factory's (Matt Pocock's skills by default).
+  const skillsDir = project.skills.dir ? resolve(repo, project.skills.dir) : SKILLS_DIR;
   const commands = {
     install: env.FACTORY_INSTALL || project.commands.install,
     sync: env.FACTORY_SYNC || project.commands.sync,
@@ -106,6 +112,7 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
     db,
     policy,
     tracker: project.tracker,
+    planningSkills: project.skills.stages.planning,
     chromium,
     effects: {
       repo,
@@ -119,6 +126,7 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       lintCommand: commands.lint ? words(commands.lint) : null,
       typecheckCommand: words(commands.typecheck),
       testCommand: words(commands.test),
+      testRunner: project.commands.testRunner,
       env: {
         start: start ? words(start) : null,
         healthUrls: env.FACTORY_ENV_HEALTH ? env.FACTORY_ENV_HEALTH.split(",").map((u) => u.trim()).filter(Boolean) : project.app.healthUrls,
@@ -132,10 +140,11 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       envStartTimeoutMs: num(env.FACTORY_ENV_START_TIMEOUT_MS, project.app.startTimeoutMs),
       browserBaseUrl: env.FACTORY_BROWSER_URL ?? project.app.url,
       browserMcp,
-      skillsDir: SKILLS_DIR,
+      skillsDir,
+      stageSkills: project.skills.stages,
       tracker: project.tracker.type === "mcp" ? project.tracker : undefined,
       verify: project.verify.enabled ? { dir: project.verify.dir, entry: project.verify.entry } : undefined,
-      isolation: { repo, home, skillsDir: SKILLS_DIR, allowedDomains: project.sandbox.allowedDomains, allowRead: project.sandbox.allowRead },
+      isolation: { repo, home, skillsDir, allowedDomains: project.sandbox.allowedDomains, allowRead: project.sandbox.allowRead },
       // The agents may run the checks themselves, but never install packages or start the app.
       tools: { run: [commands.lint, commands.typecheck, commands.test].filter((c): c is string => !!c), deny: [commands.install, commands.sync, ...(start ? [start] : [])] },
       tickMs: num(env.FACTORY_TICK_MS, 5000),

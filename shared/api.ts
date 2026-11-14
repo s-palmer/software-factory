@@ -262,6 +262,9 @@ export interface RunDetail {
   log: string;
 }
 
+/** Where tickets live, as the dashboard needs it (`GET /api/tracker`). No server details. */
+export type TrackerInfo = { type: "github" } | { type: "mcp"; label: string; keyPattern: string | null };
+
 /** The local environment the browser check uses, and who holds it (`GET /api/env`). */
 export interface EnvStatus {
   /** A start command is set in the config. */

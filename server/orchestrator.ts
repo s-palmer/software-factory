@@ -106,6 +106,8 @@ export interface OrchestratorConfig {
   tools?: ToolRules | undefined;
   /** The phase skills folder. */
   skillsDir?: string | undefined;
+  /** Skill files per stage that replace the defaults. */
+  stageSkills?: Partial<Record<string, string[]>> | undefined;
   /** A ticket system behind MCP; without it, tickets are GitHub issues the factory reads. */
   tracker?: PhaseTracker | undefined;
   /** Without it, runs are not sandboxed (tests with fakes). */
@@ -273,6 +275,7 @@ export class Orchestrator {
       baseBranch: this.config.baseBranch,
       tools: this.config.tools,
       skillsDir: this.config.skillsDir,
+      stageSkills: this.config.stageSkills,
       tracker: this.config.tracker,
       verify: this.config.verify,
       isolation: this.config.isolation && task.worktree ? runIsolation(this.config.isolation, worktreeRoot(this.config.isolation.home, task.id)) : undefined,

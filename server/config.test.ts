@@ -44,6 +44,25 @@ describe("project config", () => {
     expect(config.effects.lintCommand).toEqual(["eslint"]);
   });
 
+  it("reads a config kept outside the repository, and the Jest runner", () => {
+    const outside = join(repo(), "elsewhere.json");
+    writeFileSync(outside, JSON.stringify({ commands: { test: "pnpm test", testRunner: "jest" } }));
+    const config = loadConfig(env(repo(), { FACTORY_CONFIG: outside }));
+    expect(config.configFile).toBe(outside);
+    expect(config.effects).toMatchObject({ testCommand: ["pnpm", "test"], testRunner: "jest" });
+    expect(() => loadConfig(env(repo(), { FACTORY_CONFIG: "/nope/factory.json" }))).toThrow(/does not exist/);
+  });
+
+  it("uses the project's own skills folder and stage files", () => {
+    const dir = repo({ skills: { dir: ".claude/skills", stages: { design: ["architecture/SKILL.md"], planning: ["plan/SKILL.md"] } } });
+    const config = loadConfig(env(dir));
+    expect(config.orchestrator.skillsDir).toBe(join(dir, ".claude/skills"));
+    expect(config.orchestrator.stageSkills).toEqual({ design: ["architecture/SKILL.md"], planning: ["plan/SKILL.md"] });
+    expect(config.planningSkills).toEqual(["plan/SKILL.md"]);
+    expect(config.orchestrator.isolation?.skillsDir).toBe(join(dir, ".claude/skills"));
+    expect(loadConfig(env(repo())).orchestrator.skillsDir).toMatch(/\.claude\/skills$/);
+  });
+
   it("always configures the browser tool server, with the factory's own pinned package and Chromium", () => {
     const mcp = loadConfig(env(repo())).orchestrator.browserMcp as { args: string[] };
     expect(mcp.args.join(" ")).toMatch(/node_modules\/\.bin\/playwright-mcp" --headless --isolated .*--executable-path "\/bin\/chromium"/);

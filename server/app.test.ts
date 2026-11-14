@@ -209,6 +209,7 @@ describe("ticket keys", () => {
     expect(await (await post("/api/tasks", { ticketKey: "#3" })).json()).toMatchObject({ error: expect.stringContaining("not a Jira ticket key") });
     const plan = await post("/api/plans", { source: "#3" });
     expect(plan.status).toBe(409);
+    expect(await (await app.request("/api/tracker")).json()).toEqual({ type: "mcp", label: "Jira", keyPattern: "^[A-Z]+-\\d+$" });
   });
 });
 

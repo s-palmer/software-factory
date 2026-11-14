@@ -7,6 +7,8 @@
  */
 import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
+import { get as httpsGet } from "node:https";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { Task } from "../shared/api";
@@ -33,10 +35,29 @@ export interface EffectsConfig {
   lintCommand: string[] | null;
   typecheckCommand: string[];
   testCommand: string[];
+  /** Default "vitest". */
+  testRunner?: "vitest" | "jest";
   env: { start: string[] | null; healthUrls: string[]; logLines: number };
 }
 
 export type RunResult = { code: number; stdout: string; stderr: string };
+
+/**
+ * The HTTP status of `url`, or 599 when it does not answer. Local dev servers often use self-signed
+ * certificates, so the certificate is not checked: this only asks whether the app is up.
+ */
+function statusOf(url: string): Promise<number> {
+  const u = new URL(url);
+  const get = u.protocol === "https:" ? httpsGet : httpGet;
+  return new Promise((done) => {
+    const req = get(u, { timeout: 3000, rejectUnauthorized: false }, (res) => {
+      res.resume();
+      done(res.statusCode ?? 599);
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => done(599));
+  });
+}
 
 /** A change to one of these files makes the gate reinstall dependencies first. */
 const DEPENDENCY_FILE = new RegExp(`(^|/)(${["package.json", "pnpm-workspace.yaml", ...Object.values(LOCKFILES)].map((f) => f.replace(/\./g, "\\.")).join("|")})$`);
@@ -180,10 +201,16 @@ export function createEffects(config: EffectsConfig): Effects {
     return { ok: r.code === 0, errors: parseTypeErrors(output, cwd, cwd), output };
   }
 
+  // Jest's JSON report has the same testResults shape as Vitest's; only the flags differ.
+  const runner =
+    config.testRunner === "jest"
+      ? { changed: (base: string) => [`--changedSince=${base}`], report: (file: string) => ["--json", `--outputFile=${file}`] }
+      : { changed: (base: string) => ["--changed", base], report: (file: string) => ["--reporter=default", "--reporter=json", `--outputFile.json=${file}`] };
+
   async function failingTestFiles(cwd: string, args: string[]): Promise<{ ok: boolean; failed: string[]; output: string }> {
     const scratch = mkdtempSync(join(tmpdir(), "factory-vitest-"));
     const report = join(scratch, "report.json");
-    const r = await run([...config.testCommand, ...args, "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], cwd);
+    const r = await run([...config.testCommand, ...args, ...runner.report(report)], cwd);
     let failed: string[] = [];
     try {
       const json = JSON.parse(readFileSync(report, "utf8")) as { testResults?: Array<{ name: string; status: string }> };
@@ -214,12 +241,7 @@ export function createEffects(config: EffectsConfig): Effects {
     async isUp() {
       if (config.env.healthUrls.length === 0) return false;
       for (const url of config.env.healthUrls) {
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(3000), redirect: "manual" });
-          if (res.status >= 500) return false;
-        } catch {
-          return false;
-        }
+        if ((await statusOf(url)) >= 500) return false;
       }
       return true;
     },
@@ -295,7 +317,7 @@ export function createEffects(config: EffectsConfig): Effects {
       const browser = await chromium.launch({ headless: true });
       type Handle = { manifest(): Array<{ unitId: string; fixtures: Array<{ id: string; route: string }> }>; current(): { verdict: VerifyRun["verdict"]; checks: Array<{ status: string; label: string; detail?: string }>; blockedReason?: string } | null };
       try {
-        const page = await browser.newPage();
+        const page = await browser.newPage({ ignoreHTTPSErrors: true });
         await page.goto(new URL(entry, baseUrl).toString());
         await page.waitForFunction(() => Boolean((globalThis as unknown as { __verify?: unknown }).__verify), null, { timeout: 30_000 });
         const manifest = await page.evaluate(() => (globalThis as unknown as { __verify: Handle }).__verify.manifest());
@@ -375,7 +397,7 @@ export function createEffects(config: EffectsConfig): Effects {
       }
 
       // Tests related to the change; a failing file counts only if it passes on the merge base.
-      const tests = await failingTestFiles(worktree, ["--changed", mb]);
+      const tests = await failingTestFiles(worktree, runner.changed(mb));
       if (tests.ok) steps.push({ name: "tests", ok: true, output: "" });
       else {
         const baseDir = await prepareBase(mb);

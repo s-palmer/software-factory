@@ -1,16 +1,16 @@
 # Runtime verification
 
-The software factory copied this folder here. It checks each UI component by mounting it in a known state (a fixture) and reading the rendered DOM. The same check runs in Vitest (jsdom, `matrix.test.ts`) and in a real browser (the harness page `{{entry}}`).
+The software factory copied this folder here. It checks each UI component by mounting it in a known state, called a fixture, and reading the rendered DOM. The same check runs in Vitest (`matrix.test.ts`, in jsdom) and in a real browser (on the harness page, `{{entry}}`).
 
 Do not edit `core/`, `verifiers/` or `harness/`: run `factory init --force` to update them. Your specs go in `specs/`.
 
 ## Rules for a UI unit
 
-1. **The root element emits a DOM contract:** `verifyAttrs({ unit: "<Id>", ...state })` from `{{dir}}/core/contract`, spread on the root element. Use kebab-case keys (`"can-save": canSave`). The values describe what the unit shows, for example a count or a mode.
-2. **Each unit has a spec** in `specs/<Id>.verify.ts`, imported in `specs/index.ts`. It has a zod `propsSchema`, fixtures and invariants.
-3. **At least one fixture has `probe: true`:** an edge case such as empty, loading, an error, or a very long value. The matrix test fails without one.
-4. **Invariants read the DOM contract and the rendered DOM, never React internals.** Return `true`, or a string that says what was observed.
-5. **BLOCKED is not FAIL.** BLOCKED means the check could not observe, for example an `act` selector did not match. Fix the fixture.
+1. The root element emits a DOM contract: spread `verifyAttrs({ unit: "<Id>", ...state })` from `{{dir}}/core/contract` on it. Use kebab-case keys (`"can-save": canSave`). The values describe what the unit shows, such as a count or a mode.
+2. Each unit has a spec in `specs/<Id>.verify.ts`, imported in `specs/index.ts`, with a zod `propsSchema`, fixtures and invariants.
+3. At least one fixture has `probe: true`. It is an edge case: empty, loading, an error or a long value. The matrix test fails without one.
+4. Invariants read the DOM contract and the rendered DOM, never React internals. They return `true`, or a string that says what they saw.
+5. BLOCKED is not FAIL. BLOCKED means the check could not observe, for example because an `act` selector matched nothing. Fix the fixture.
 
 ## A spec
 

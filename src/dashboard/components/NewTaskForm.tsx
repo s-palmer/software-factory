@@ -1,12 +1,16 @@
 import { useState, type FormEvent } from "react";
-import type { CreateTaskInput } from "../../../shared/api";
+import type { CreateTaskInput, TrackerInfo } from "../../../shared/api";
 import { verifyAttrs } from "../../verify/core/contract";
 
 export interface NewTaskFormProps {
   onCreate: (input: CreateTaskInput) => Promise<void> | void;
-  /** Error from the last create attempt, e.g. the API rejected it. */
+  /** The error from the last attempt to create a task, such as the API's refusal. */
   error?: string | null;
+  /** Where tickets live. Default: GitHub issues. */
+  tracker?: TrackerInfo;
 }
+
+const GITHUB: TrackerInfo = { type: "github" };
 
 /** "12", "#12" or " 12 " → "#12". Anything else → null. */
 export function parseIssue(text: string): string | null {
@@ -16,29 +20,40 @@ export function parseIssue(text: string): string | null {
   return n > 0 ? `#${n}` : null;
 }
 
+/** A ticket key in the tracker's form: "#12" for GitHub; for Jira or Linear, upper case and matching the key pattern. */
+export function parseKey(text: string, tracker: TrackerInfo = GITHUB): string | null {
+  if (tracker.type === "github") return parseIssue(text);
+  const key = text.trim().toUpperCase();
+  if (!key || /\s/.test(key)) return null;
+  return !tracker.keyPattern || new RegExp(tracker.keyPattern).test(key) ? key : null;
+}
+
 /** "5, #6 5" → ["#5", "#6"] (deduplicated, in order). Empty → []. Any invalid entry → null. */
-export function parseBlockers(text: string): string[] | null {
+export function parseBlockers(text: string, tracker: TrackerInfo = GITHUB): string[] | null {
   const parts = text.split(/[\s,]+/).filter(Boolean);
   const keys: string[] = [];
   for (const part of parts) {
-    const key = parseIssue(part);
+    const key = parseKey(part, tracker);
     if (!key) return null;
     if (!keys.includes(key)) keys.push(key);
   }
   return keys;
 }
 
-/** Give the factory a GitHub issue. The scoping agent reads the issue for the title and details. */
-export function NewTaskForm({ onCreate, error }: NewTaskFormProps) {
+/** Give the factory a ticket (a GitHub issue, or a Jira or Linear key). The agents read its title and details. */
+export function NewTaskForm({ onCreate, error, tracker = GITHUB }: NewTaskFormProps) {
+  const github = tracker.type === "github";
+  const noun = github ? "issue" : "ticket";
+  const example = github ? "12" : "PROJ-12";
   const [issue, setIssue] = useState("");
   const [blockers, setBlockers] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const ticketKey = parseIssue(issue);
-  const blockedBy = parseBlockers(blockers);
-  const issueError = issue.trim() !== "" && !ticketKey ? "Enter an issue number, like 12 or #12." : null;
+  const ticketKey = parseKey(issue, tracker);
+  const blockedBy = parseBlockers(blockers, tracker);
+  const issueError = issue.trim() !== "" && !ticketKey ? (github ? "Enter an issue number, like 12 or #12." : `Enter a ${tracker.label} key, like ${example}.`) : null;
   const blockersError =
-    blockedBy === null ? "Blocked by takes issue numbers only, like 5, 6." : ticketKey && blockedBy.includes(ticketKey) ? `${ticketKey} can't block itself.` : null;
+    blockedBy === null ? (github ? "Blocked by takes issue numbers only, like 5, 6." : `Blocked by takes ${tracker.label} keys only, like PROJ-5, PROJ-6.`) : ticketKey && blockedBy.includes(ticketKey) ? `${ticketKey} can't block itself.` : null;
   const canSubmit = ticketKey !== null && blockedBy !== null && !blockersError && !submitting;
 
   async function submit(e: FormEvent) {
@@ -62,6 +77,7 @@ export function NewTaskForm({ onCreate, error }: NewTaskFormProps) {
       onSubmit={submit}
       {...verifyAttrs({
         unit: "NewTaskForm",
+        tracker: github ? "github" : tracker.label,
         "can-submit": canSubmit,
         submitting,
         "has-error": Boolean(error),
@@ -71,14 +87,14 @@ export function NewTaskForm({ onCreate, error }: NewTaskFormProps) {
       })}
     >
       <h2>New task</h2>
-      <label htmlFor="task-issue">GitHub issue</label>
+      <label htmlFor="task-issue">{github ? "GitHub issue" : `${tracker.label} ticket`}</label>
       <input
         id="task-issue"
         type="text"
-        inputMode="numeric"
+        inputMode={github ? "numeric" : "text"}
         value={issue}
         onChange={(e) => setIssue(e.target.value)}
-        placeholder="e.g. 12"
+        placeholder={`such as ${example}`}
         aria-invalid={issueError ? true : undefined}
         aria-describedby={issueError ? "task-issue-error" : undefined}
       />
@@ -93,7 +109,7 @@ export function NewTaskForm({ onCreate, error }: NewTaskFormProps) {
         type="text"
         value={blockers}
         onChange={(e) => setBlockers(e.target.value)}
-        placeholder="e.g. 5, 6"
+        placeholder={github ? "such as 5, 6" : "such as PROJ-5, PROJ-6"}
         aria-invalid={blockersError ? true : undefined}
         aria-describedby={blockersError ? "task-blocked-by-error" : undefined}
       />
@@ -102,7 +118,7 @@ export function NewTaskForm({ onCreate, error }: NewTaskFormProps) {
           {blockersError}
         </p>
       )}
-      <p className="hint">The factory reads the title and details from the issue.</p>
+      <p className="hint">The factory reads the title and details from the {noun}.</p>
       {error && (
         <p role="alert" className="error">
           {error}

@@ -69,7 +69,7 @@ export const TrackerConfig = z.discriminatedUnion("type", [
     type: z.literal("mcp"),
     /** The server name in the agents' MCP config. Use the name you signed in with in Claude Code (`/mcp`). */
     name: z.string().regex(/^[a-z][a-z0-9_-]*$/),
-    /** Shown in prompts and the dashboard, e.g. "Jira". */
+    /** Shown in prompts and the dashboard, such as "Jira". */
     label: z.string().min(1),
     /** An MCP server entry, as in `.mcp.json`: `{ "type": "http", "url": ... }` or `{ "command": ..., "args": [...] }`. */
     server: z.record(z.string(), z.unknown()),
@@ -131,6 +131,8 @@ export const ProjectConfig = z.object({
       lint: z.string().min(1).optional(),
       typecheck: z.string().min(1).default(pnpm.typecheck),
       test: z.string().min(1).default(pnpm.test),
+      /** Which runner `test` starts; the factory adds that runner's flags for changed files and a JSON report. */
+      testRunner: z.enum(["vitest", "jest"]).default("vitest"),
     })
     .prefault({}),
   /**
@@ -149,6 +151,19 @@ export const ProjectConfig = z.object({
   maxAttempts: z.number().int().positive().default(3),
   policy: RiskPolicy.default(DEFAULT_POLICY),
   tracker: TrackerConfig.default({ type: "github" }),
+  /**
+   * The skills each stage reads. By default the factory's own copies of Matt Pocock's skills. Set `dir` to your own
+   * skills folder (absolute, or relative to the repository root), and `stages` to the files each stage reads,
+   * relative to `dir`. A stage left out of `stages` keeps the default files, so they must exist in `dir` too.
+   */
+  skills: z
+    .object({
+      dir: z.string().min(1).optional(),
+      stages: z
+        .partialRecord(z.enum(["scoping", "design", "test_writing", "implementing", "reviewing", "pr", "planning"]), z.array(z.string().min(1)))
+        .default({}),
+    })
+    .prefault({}),
   /**
    * Runtime verification for React UI (`factory init` copies the framework into `dir`). When on, the test phase
    * writes a `<Unit>.verify.ts` spec for each UI unit it adds or changes, the gate runs them in jsdom, and the
@@ -170,7 +185,7 @@ export const ProjectConfig = z.object({
   sandbox: z
     .object({
       allowedDomains: z.array(z.string().min(1)).default([]),
-      /** Folders outside the worktree the project's tools must read, e.g. a shared cache. The home folder is denied otherwise. */
+      /** Folders outside the worktree the project's tools must read, such as a shared cache. The rest of the home folder is denied. */
       allowRead: z.array(z.string().min(1)).default([]),
     })
     .prefault({}),

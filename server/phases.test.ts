@@ -140,3 +140,15 @@ describe("isolation", () => {
   });
 });
 
+describe("replaceable skills", () => {
+  it("reads the project's own skills for a stage, with only the rules every stage needs", () => {
+    const call = phaseCall("design", task, { ...ctx, skillsDir: "/code/app/.claude/skills", stageSkills: { design: ["architecture/SKILL.md"] } });
+    expect(call.prompt).toContain("`/code/app/.claude/skills/architecture/SKILL.md`");
+    expect(call.prompt).not.toContain("DESIGN-IT-TWICE");
+    expect(call.prompt).toContain("Do not commit, push or open a pull request");
+    expect(call.addDirs).toEqual(["/code/app/.claude/skills"]);
+    // A stage left out keeps the default files, in the project's folder.
+    expect(phaseCall("scoping", task, { ...ctx, skillsDir: "/code/app/.claude/skills", stageSkills: { design: ["x.md"] } }).prompt).toContain("`/code/app/.claude/skills/to-spec/SKILL.md`");
+  });
+});
+

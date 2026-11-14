@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CreateTaskInput, TaskSummary } from "../../../shared/api";
+import type { CreateTaskInput, TaskSummary, TrackerInfo } from "../../../shared/api";
 import { api, type OrchestratorState } from "../api";
 import { NewTaskForm } from "../components/NewTaskForm";
 import { OrchestratorSwitch } from "../components/OrchestratorSwitch";
@@ -11,6 +11,7 @@ export function HomePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [orchestrator, setOrchestrator] = useState<OrchestratorState | null>(null);
+  const [tracker, setTracker] = useState<TrackerInfo>({ type: "github" });
   const [orchestratorBusy, setOrchestratorBusy] = useState(false);
   const [orchestratorError, setOrchestratorError] = useState<string | null>(null);
 
@@ -21,6 +22,7 @@ export function HomePage() {
   useEffect(() => {
     // An API without the route (or down) counts as "not available".
     api.getOrchestrator().then(setOrchestrator, () => setOrchestrator({ available: false, running: false }));
+    api.getTracker().then(setTracker, () => undefined);
   }, []);
 
   async function toggleOrchestrator(running: boolean) {
@@ -48,7 +50,7 @@ export function HomePage() {
 
   return (
     <div className="home">
-      <NewTaskForm onCreate={create} error={createError} />
+      <NewTaskForm onCreate={create} error={createError} tracker={tracker} />
       <div>
         <div className="home__heading">
           <h2>Tasks</h2>

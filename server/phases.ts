@@ -28,6 +28,8 @@ export interface PhaseContext {
   tools?: ToolRules | undefined;
   /** Where the phase skills live. Default: this install's `.claude/skills`. */
   skillsDir?: string | undefined;
+  /** Skill files per stage that replace the defaults (relative to `skillsDir`). */
+  stageSkills?: Partial<Record<AgentStage, string[]>> | undefined;
   /** A ticket system behind MCP. Without it, the ticket is a GitHub issue the factory already read. */
   tracker?: PhaseTracker | undefined;
   /** What the run may touch. Without it, a run gets only the fixed denies (tests of prompt building). */
@@ -332,10 +334,26 @@ function overrides(stage: AgentStage, task: Task, ctx: PhaseContext): string[] {
   }
 }
 
+/** The stage's skill files, relative to the skills folder: the project's choice, or the defaults. */
+export function stageSkillFiles(stage: AgentStage, ctx: PhaseContext): string[] {
+  return ctx.stageSkills?.[stage] ?? PHASE_SKILLS[stage];
+}
+
+/**
+ * Rules for replacement skills. The default overrides name parts of the default skills (their templates and
+ * steps), so a stage with its own skills gets only the rules every stage needs.
+ */
+function genericRules(stage: AgentStage, ctx: PhaseContext): string[] {
+  const base = `origin/${ctx.baseBranch ?? "main"}`;
+  const rules = [TRACKER, "No person is present: do not wait for confirmation, and put any question in `questions`.", "Do not commit, push or open a pull request; the factory does that."];
+  if (stage === "reviewing" || stage === "pr") rules.push(`Read the change with \`git diff --merge-base ${base}\` and \`git status --short\`.`);
+  return rules;
+}
+
 function howToWork(stage: AgentStage, task: Task, ctx: PhaseContext): string {
-  const files = PHASE_SKILLS[stage].map((f) => join(skillsDir(ctx), f));
+  const files = stageSkillFiles(stage, ctx).map((f) => join(skillsDir(ctx), f));
   if (files.length === 0) return "";
-  const rules = overrides(stage, task, ctx);
+  const rules = ctx.stageSkills?.[stage] ? genericRules(stage, ctx) : overrides(stage, task, ctx);
   return `\n## How to work\n\nRead these files with the Read tool before you start and follow them, except where the overrides below say otherwise. Do not invoke them as slash commands.\n\n${files.map((f) => `- \`${f}\``).join("\n")}\n\nOverrides for this factory (the headless rules win over these, and these win over the skills):\n\n${rules.map((r) => `- ${r}`).join("\n")}\n`;
 }
 
@@ -393,7 +411,7 @@ export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): Cla
     prompt,
     allowedTools: [...stageTools(stage, ctx.tools ?? DEFAULT_TOOLS), ...tracker.tools],
     disallowedTools: denyTools(ctx.tools),
-    addDirs: PHASE_SKILLS[stage].length > 0 ? [skillsDir(ctx)] : [],
+    addDirs: stageSkillFiles(stage, ctx).length > 0 ? [skillsDir(ctx)] : [],
     mcpServers: { ...tracker.servers, ...(stage === "browser_check" && ctx.browserMcp ? { playwright: ctx.browserMcp } : {}) },
     outputSchema: SCHEMAS[stage],
     maxBudgetUsd: BUDGETS[stage],

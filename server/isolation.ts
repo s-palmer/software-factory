@@ -31,10 +31,10 @@ export function toolchainDirs(): string[] {
       return "";
     }
   };
-  // The folders on PATH that hold the tools, e.g. ~/.local/bin for a corepack pnpm.
+  // The folders on PATH that hold the tools, such as ~/.local/bin for a pnpm installed by corepack.
   const bins = ["node", "npm", "npx", "pnpm", "yarn", "bun", "git"].map((tool) => ask("sh", ["-c", `command -v ${tool}`])).filter(Boolean).map((p) => dirname(p));
   const found = [
-    dirname(dirname(process.execPath)), // the Node install, e.g. ~/.nvm/versions/node/v24
+    dirname(dirname(process.execPath)), // the Node install, such as ~/.nvm/versions/node/v24
     ...bins,
     join(home, ".gitconfig"),
     join(home, ".config/git"),

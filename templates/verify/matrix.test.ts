@@ -12,7 +12,7 @@ import { runFixture } from "./core/runner";
 describe("verification matrix", () => {
   for (const unit of allUnits()) {
     describe(`unit ${unit.id}`, () => {
-      it("has at least one probe fixture (not just the happy path)", () => {
+      it("has at least one probe fixture (an edge case)", () => {
         expect(unit.fixtures.some((f) => f.probe)).toBe(true);
       });
       for (const fixture of unit.fixtures) {

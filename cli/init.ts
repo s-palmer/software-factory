@@ -128,11 +128,16 @@ function readPackageJson(dir: string): PackageJson | null {
 /** The config `factory init` writes: presets for the package manager, the dev server if there is one, the default policy. */
 export function defaultConfig(dir: string, choices: { tracker?: TrackerChoice; base?: string; start?: string | null; url?: string; verify?: boolean } = {}): ProjectConfig {
   const pm = detectPackageManager(dir);
-  const scripts = readPackageJson(dir)?.scripts ?? {};
-  const commands = commandsFor(pm);
+  const pkg = readPackageJson(dir);
+  const scripts = pkg?.scripts ?? {};
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  // A Jest project runs its tests through its own test script.
+  const jest = Boolean(deps.jest) && !deps.vitest;
+  const commands = { ...commandsFor(pm), ...(jest ? { test: scripts.test ? `${pm} test` : `${pm} exec jest`, testRunner: "jest" as const } : {}) };
   const url = choices.url ?? "http://localhost:5173";
   const start = choices.start === undefined ? (scripts.dev ? `${pm} run dev` : null) : choices.start;
-  const verify = ProjectConfig.shape.verify.parse({ enabled: choices.verify ?? false });
+  // The verification matrix test runs on Vitest.
+  const verify = ProjectConfig.shape.verify.parse({ enabled: (choices.verify ?? false) && !jest });
   return ProjectConfig.parse({
     ...(choices.base ? { base: choices.base } : {}),
     commands: scripts.lint ? commands : { ...commands, lint: undefined },
@@ -256,7 +261,9 @@ function runChecks(io: InitIo, root: string, config: ProjectConfig): Check[] {
       `${config.remote}/${config.base} must exist: git push ${config.remote} HEAD:${config.base}`,
     ),
     check("package.json", !!pkg, `no package.json in ${config.projectDir || "the repository root"}`),
-    check("Vitest", !!deps.vitest, "the test gate needs Vitest: add vitest as a dev dependency", deps.vitest),
+    config.commands.testRunner === "jest"
+      ? check("Jest", !!deps.jest, "commands.testRunner is jest, but jest is not a dependency", deps.jest)
+      : check("Vitest", !!deps.vitest, "the test gate needs Vitest or Jest: add vitest as a dev dependency, or set commands.testRunner", deps.vitest),
     check("TypeScript", !!deps.typescript, "the type gate needs tsc: add typescript as a dev dependency", deps.typescript),
   ];
   if (config.tracker.type === "mcp") {
@@ -278,7 +285,7 @@ function runChecks(io: InitIo, root: string, config: ProjectConfig): Check[] {
   // The agents' shell commands run in Claude Code's sandbox; on Linux it needs bubblewrap and socat.
   if (io.platform === "linux") {
     const ok = io.run("sh", ["-c", "command -v bwrap && command -v socat"], root) !== null;
-    checks.push(check("sandbox (bubblewrap, socat)", ok, "install them, e.g. sudo apt-get install bubblewrap socat"));
+    checks.push(check("sandbox (bubblewrap, socat)", ok, "install them, for example with sudo apt-get install bubblewrap socat"));
   }
   return checks;
 }

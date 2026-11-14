@@ -27,6 +27,9 @@ export interface PlannerConfig {
   artifactRoot: string;
   /** Write the bodies to the artifacts and file nothing (FACTORY_DRY_RUN_PLAN). */
   dryRun: boolean;
+  /** The skills folder and the PM run's skill files, when the project replaces the defaults. */
+  skillsDir?: string;
+  skillFiles?: string[];
 }
 
 /** `gh` as the issue tracker. Runs in the repository; reads and writes go through fixed commands only. */
@@ -77,8 +80,12 @@ export function ghTracker(repo: string): IssueTracker {
 
 const READ = ["Read", "Grep", "Glob", "Bash(git log:*)", "Bash(git diff:*)", "Bash(gh issue view:*)", "Bash(gh issue list:*)"];
 
-export function pmCall(source: string, opts: { model: string; feedback: string[]; specPath: string | null; skillsDir?: string }): ClaudeCall {
+/** The skills the PM run follows, relative to the skills folder. */
+export const PLANNING_SKILLS = ["to-spec/SKILL.md", "to-tickets/SKILL.md"];
+
+export function pmCall(source: string, opts: { model: string; feedback: string[]; specPath: string | null; skillsDir?: string; skillFiles?: string[] }): ClaudeCall {
   const skills = opts.skillsDir ?? DEFAULT_SKILLS_DIR;
+  const files = (opts.skillFiles ?? PLANNING_SKILLS).map((f) => `\`${join(skills, f)}\``).join(" and ");
   const what = source.startsWith("#")
     ? `The idea is GitHub issue ${source}. Read it with \`gh issue view ${source.slice(1)} --comments\`.`
     : `The idea is the draft spec \`${source}\`. Rewrite it in place in the spec format.`;
@@ -88,7 +95,7 @@ export function pmCall(source: string, opts: { model: string; feedback: string[]
 
 You are the factory's product manager. ${what}
 
-1. Read \`${join(skills, "to-spec/SKILL.md")}\` and \`${join(skills, "to-tickets/SKILL.md")}\` and follow their formats, with these overrides: do not interview or quiz anyone, do not publish to any tracker (the factory files the issues), and do not check seams with a user. Look at \`specs/\` for existing specs, the codebase, and existing issues (\`gh issue list --label factory --state all --limit 200\`), so you do not plan work that exists.
+1. Read ${files} and follow their formats, with these overrides: do not interview or quiz anyone, do not publish to any tracker (the factory files the issues), and do not check seams with a user. Look at \`specs/\` for existing specs, the codebase, and existing issues (\`gh issue list --label factory --state all --limit 200\`), so you do not plan work that exists.
 2. ${target} Use the template's sections exactly: Problem Statement, Solution, User Stories (a long numbered list), Implementation Decisions, Testing Decisions, Out of Scope, Further Notes.
 3. Return the ticket plan: vertical-slice tickets (at most 15), each with a key like \`ABC-01\` (one prefix per spec, stable across re-runs), a size, the tickets that block it, what it builds (behaviour, no file paths), testable acceptance criteria, and \`stories\`: the numbers of the user stories it covers. Every user story must be covered by a ticket or listed in \`deferred\` as "Story N: <reason>".
 4. Questions you cannot settle from the idea, the code or the repository go in \`questions\`; a decider answers them.
@@ -160,7 +167,13 @@ export class Planner {
       const run = await this.db.startAgentRun(planId, "backlog", "planning", model);
       const runDir = join(this.config.artifactRoot, "plans", planId, run.id);
       mkdirSync(runDir, { recursive: true });
-      const result = await this.effects.claude(pmCall(plan.source, { model, feedback, specPath: plan.specPath }), { cwd: worktree, runDir });
+      const result = await this.effects.claude(pmCall(plan.source, {
+          model,
+          feedback,
+          specPath: plan.specPath,
+          ...(this.config.skillsDir ? { skillsDir: this.config.skillsDir } : {}),
+          ...(this.config.skillFiles ? { skillFiles: this.config.skillFiles } : {}),
+        }), { cwd: worktree, runDir });
       await this.db.finishAgentRun(run.id, {
         status: result.ok ? "passed" : "failed",
         costUsd: result.costUsd,

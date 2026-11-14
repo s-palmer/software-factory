@@ -99,7 +99,7 @@ function phaseModels(pairs: string[] = []): Partial<Record<Phase, string>> {
   const out: Partial<Record<Phase, string>> = {};
   for (const pair of pairs) {
     const [phase, model] = pair.split("=");
-    if (!phase || !model) throw usageError(`--phase takes <phase>=<model>, e.g. implementing=claude-opus-5-5 (got "${pair}")`);
+    if (!phase || !model) throw usageError(`--phase takes <phase>=<model>, for example implementing=claude-opus-5-5 (got "${pair}")`);
     out[oneOf(phase, PHASES, "phase")] = model;
   }
   return out;

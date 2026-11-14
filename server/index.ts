@@ -56,6 +56,8 @@ if (config.enabled) {
     maxAttempts: config.orchestrator.maxAttempts,
     artifactRoot: config.orchestrator.artifactRoot,
     dryRun: process.env.FACTORY_DRY_RUN_PLAN === "1",
+    ...(config.orchestrator.skillsDir ? { skillsDir: config.orchestrator.skillsDir } : {}),
+    ...(config.planningSkills ? { skillFiles: config.planningSkills } : {}),
   });
   // Optional reference agents, off by default: an external PM / orchestrator drives the factory through the CLI
   // (docs/INTERFACE.md). FACTORY_INTAKE_POLL_MS turns on intake polling, FACTORY_CONDUCTOR_MS the built-in conductor.

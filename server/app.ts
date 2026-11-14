@@ -154,6 +154,10 @@ export function createApp(
     return c.json({ id, status: "running" }, 202);
   });
 
+  app.get("/api/tracker", (c) =>
+    c.json(tracker.type === "github" ? { type: "github" } : { type: "mcp", label: tracker.label, keyPattern: tracker.keyPattern ?? null }),
+  );
+
   /** The local environment for the browser check: who holds it, and a person's start and stop. */
   app.get("/api/env", async (c) => (env ? c.json(await env.status()) : c.json({ error: "The orchestrator is not configured on this server" }, 503)));
 

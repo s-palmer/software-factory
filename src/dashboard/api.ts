@@ -1,4 +1,4 @@
-import type { CreateTaskInput, DefaultModels, EnvStatus, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
+import type { CreateTaskInput, DefaultModels, EnvStatus, TrackerInfo, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
 import type { RiskPolicy } from "../../shared/risk";
 
 /** The orchestrator loop. `available: false` when the server runs without one (e.g. tests). */
@@ -41,6 +41,7 @@ export const api = {
   setOrchestrator: (running: boolean) => request<OrchestratorState>("/api/orchestrator", { method: "PUT", body: JSON.stringify({ running }) }),
   getPolicy: () => request<RiskPolicy>("/api/policy"),
   getEnv: () => request<EnvStatus>("/api/env"),
+  getTracker: () => request<TrackerInfo>("/api/tracker"),
   // A refused start or stop (409) still carries a message for the page.
   startEnv: () => envAction("start"),
   stopEnv: () => envAction("stop"),
