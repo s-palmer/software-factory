@@ -189,7 +189,8 @@ export function createEffects(config: EffectsConfig): Effects {
     // Install only when the lockfile at this commit differs from the last install (the first build takes minutes).
     const stamp = join(baseRoot, ".factory-installed");
     const hashes = await Promise.all(Object.values(LOCKFILES).map(async (f) => (await run(["git", "rev-parse", `${sha}:${join(config.projectDir, f)}`], baseRoot)).stdout.trim()));
-    const want = hashes.filter(Boolean).join(",") || "none";
+    // The install command is part of the stamp: a new command (such as a different store layout) needs a fresh install.
+    const want = `${hashes.filter(Boolean).join(",") || "none"}|${config.installCommand.join(" ")}`;
     if (!existsSync(stamp) || readFileSync(stamp, "utf8") !== want) {
       await must(config.installCommand, dir, { timeoutMs: 30 * 60_000 });
       writeFileSync(stamp, want);

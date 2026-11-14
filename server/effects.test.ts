@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -126,6 +126,19 @@ describe("git and the gate, against a real repository", () => {
       { path: "src/a.ts", status: "modified", added: 1, removed: 1 },
       { path: "src/b.ts", status: "added", added: 2, removed: 0 },
     ]);
+  });
+
+  it("reinstalls the base checkout when the install command changes, not on every use", async () => {
+    const count = join(config.home, "installs.txt");
+    const installs = () => (existsSync(count) ? readFileSync(count, "utf8").split("\n").filter(Boolean) : []);
+    const withInstall = (tag: string) => createEffects({ ...config, installCommand: ["sh", "-c", `echo ${tag} >> ${JSON.stringify(count)}`] });
+    const { worktree } = await withInstall("a").createWorktree(task);
+    const before = installs().length;
+    await withInstall("a").baseCheckout(worktree);
+    await withInstall("a").baseCheckout(worktree);
+    expect(installs().length - before).toBe(1);
+    await withInstall("b").baseCheckout(worktree);
+    expect(installs().slice(-1)).toEqual(["b"]);
   });
 
   it("passes the gate when the only type errors already exist on the merge base", async () => {
