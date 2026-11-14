@@ -140,6 +140,7 @@ Close the window, then set `app.browserProfile` to that folder. The browser chec
 | `sandbox.allowedDomains`, `sandbox.allowRead` | Hosts and folders the agents' commands may reach |
 | `verify` | Runtime verification for React UI |
 | `policy`, `maxAttempts` | High-risk paths and size limits; failures before a task escalates |
+| `trustedAuthors` | GitHub logins whose issues and comments count as trusted; agents treat others as information only |
 | `maxParallelTasks` | How many tasks run at once (default 3). One browser check at a time uses the local app; the others wait for it |
 
 Environment variables override single fields: `FACTORY_REPO`, `FACTORY_CONFIG`, `FACTORY_HOME` (default `~/.factory/<repo>`), `FACTORY_BASE`, `FACTORY_TEST`, `FACTORY_BROWSER_PROFILE`, `FACTORY_AUTOSTART=1`, `API_PORT`, and others in `server/config.ts`. The CLI uses `FACTORY_URL` and `FACTORY_ACTOR`.

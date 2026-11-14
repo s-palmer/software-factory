@@ -377,9 +377,15 @@ export function createEffects(config: EffectsConfig): Effects {
 
     async fetchIssue(cwd, key) {
       const number = key.replace(/^#/, "");
-      const raw = await must(["gh", "issue", "view", number, "--json", "title,body,url,comments"], cwd);
-      const issue = JSON.parse(raw) as { title: string; body: string; url: string; comments?: Array<{ author?: { login?: string }; body: string }> };
-      return { title: issue.title, body: issue.body, url: issue.url, comments: (issue.comments ?? []).map((c) => `${c.author?.login ?? "someone"}: ${c.body}`) };
+      const raw = await must(["gh", "issue", "view", number, "--json", "title,body,url,author,comments"], cwd);
+      const issue = JSON.parse(raw) as { title: string; body: string; url: string; author?: { login?: string }; comments?: Array<{ author?: { login?: string }; body: string }> };
+      return {
+        title: issue.title,
+        body: issue.body,
+        url: issue.url,
+        author: issue.author?.login ?? "someone",
+        comments: (issue.comments ?? []).map((c) => ({ author: c.author?.login ?? "someone", body: c.body })),
+      };
     },
 
     async diff(worktree) {

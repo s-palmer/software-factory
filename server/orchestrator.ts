@@ -123,6 +123,8 @@ export interface OrchestratorConfig {
   isolation?: IsolationConfig | undefined;
   /** Runtime verification of UI units, when the project has it. */
   verify?: VerifyContext | undefined;
+  /** GitHub logins whose issues and comments count as trusted. */
+  trustedAuthors?: string[] | undefined;
   /** How many tasks the loop works on at once. Default 1. */
   maxParallel?: number | undefined;
   /** The branch PRs target, named in the review and PR prompts (default "main"). */
@@ -353,6 +355,7 @@ export class Orchestrator {
       stageSkills: this.config.stageSkills,
       tracker: this.config.tracker,
       verify: this.config.verify,
+      trustedAuthors: this.config.trustedAuthors,
       isolation: this.config.isolation && task.worktree ? runIsolation(this.config.isolation, worktreeRoot(this.config.isolation.home, task.id)) : undefined,
       settings,
     };

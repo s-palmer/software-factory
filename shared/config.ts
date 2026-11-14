@@ -155,6 +155,8 @@ export const ProjectConfig = z.object({
     .prefault({}),
   /** Failed attempts in a row before a task escalates. */
   maxAttempts: z.number().int().positive().default(3),
+  /** GitHub logins whose issues and comments the agents may treat as trusted. Others are marked as information only. */
+  trustedAuthors: z.array(z.string().min(1)).default([]),
   /** How many tasks the factory works on at once. The local app is still used by one browser check at a time. */
   maxParallelTasks: z.number().int().min(1).max(20).default(3),
   policy: RiskPolicy.default(DEFAULT_POLICY),

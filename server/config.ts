@@ -158,6 +158,7 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       artifactRoot: artifacts,
       maxAttempts: num(env.FACTORY_MAX_ATTEMPTS, project.maxAttempts),
       maxParallel: num(env.FACTORY_PARALLEL, project.maxParallelTasks),
+      trustedAuthors: project.trustedAuthors,
       guardScript: fileURLToPath(new URL("./guard.mjs", import.meta.url)),
       envStartTimeoutMs: num(env.FACTORY_ENV_START_TIMEOUT_MS, project.app.startTimeoutMs),
       browserBaseUrl: env.FACTORY_BROWSER_URL ?? project.app.url,
