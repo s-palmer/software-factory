@@ -105,13 +105,13 @@ describe("tickets", () => {
 
   it("gives every run the tracker's MCP server and only its read tools", () => {
     const jira = { label: "Jira", name: "jira", server: { type: "http", url: "https://mcp.atlassian.com/v2/mcp" }, tools: ["getJiraIssue"], instructions: "Use getJiraIssue." };
-    const jiraTask = { ...task, ticketKey: "LI-12" } as Task;
+    const jiraTask = { ...task, ticketKey: "PROJ-12" } as Task;
     for (const call of [phaseCall("implementing", jiraTask, { ...ctx, tracker: jira }), deciderCall(jiraTask, { ...ctx, tracker: jira }, "design", ["q"], "")]) {
       expect(call.mcpServers).toEqual({ jira: jira.server });
       expect(call.allowedTools).toContain("mcp__jira__getJiraIssue");
-      expect(call.prompt).toContain("Jira ticket LI-12. Use getJiraIssue.");
+      expect(call.prompt).toContain("Jira ticket PROJ-12. Use getJiraIssue.");
     }
-    expect(phaseCall("scoping", jiraTask, { ...ctx, tracker: jira }).prompt).toContain("docs/designs/li-12-solution.md");
+    expect(phaseCall("scoping", jiraTask, { ...ctx, tracker: jira }).prompt).toContain("docs/designs/proj-12-solution.md");
     const linear = phaseCall("scoping", jiraTask, { ...ctx, tracker: { ...jira, name: "linear", tools: "*" } });
     expect(linear.allowedTools).toContain("mcp__linear");
   });

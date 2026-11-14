@@ -23,7 +23,7 @@ const EXPECTED: Record<string, CreateTaskInput> = {
   "hash-form": { ticketKey: "#12", blockedBy: [] },
   "padded-form": { ticketKey: "#12", blockedBy: [] },
   "with-blockers": { ticketKey: "#12", blockedBy: ["#5", "#6"] },
-  "jira-key": { ticketKey: "LI-12483", blockedBy: ["LI-1"] },
+  "jira-key": { ticketKey: "PROJ-12483", blockedBy: ["PROJ-1"] },
 };
 
 const jira = { type: "mcp", label: "Jira", keyPattern: "^[A-Z][A-Z0-9]+-\\d+$" } as const;
@@ -58,7 +58,7 @@ registerUnit<NewTaskFormProps>({
     { id: "zero", probe: true, description: "Probe: issue 0 doesn't exist.", props: { onCreate: record }, act: (ctx) => fill(ctx, "0") },
     { id: "bad-blocker", probe: true, description: "Probe: a non-number blocker is rejected.", props: { onCreate: record }, act: (ctx) => fill(ctx, "12", "5, abc") },
     { id: "self-blocker", probe: true, description: "Probe: an issue can't block itself.", props: { onCreate: record }, act: (ctx) => fill(ctx, "#12", "12") },
-    { id: "jira-key", description: "Jira: a key in lower case is sent upper case, with its blocker.", props: { onCreate: record, tracker: jira }, act: (ctx) => fill(ctx, "li-12483", "LI-1") },
+    { id: "jira-key", description: "Jira: a key in lower case is sent upper case, with its blocker.", props: { onCreate: record, tracker: jira }, act: (ctx) => fill(ctx, "proj-12483", "PROJ-1") },
     { id: "jira-not-a-key", probe: true, description: "Probe: Jira does not take a GitHub issue number.", props: { onCreate: record, tracker: jira }, act: (ctx) => fill(ctx, "#12") },
     { id: "server-error", probe: true, description: "Probe: an API error is shown as an alert.", props: { onCreate: record, error: "Ticket #12 already has task 3f2a" } },
   ],

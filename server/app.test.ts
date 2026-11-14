@@ -203,12 +203,12 @@ describe("ticket keys", () => {
   it("normalises GitHub issue numbers and refuses other keys", async () => {
     const task = (await (await post("/api/tasks", { ticketKey: "12" })).json()) as Task;
     expect(task).toMatchObject({ ticketKey: "#12", title: "#12" });
-    expect((await post("/api/tasks", { ticketKey: "LI-1" })).status).toBe(400);
+    expect((await post("/api/tasks", { ticketKey: "PROJ-1" })).status).toBe(400);
   });
 
   it("checks keys against an MCP tracker's pattern, and turns off the GitHub-only PM run", async () => {
     app = createApp(db, { tracker: { type: "mcp", name: "jira", label: "Jira", server: {}, tools: "*", keyPattern: "^[A-Z]+-\\d+$", instructions: "x" } });
-    expect(await (await post("/api/tasks", { ticketKey: "LI-1" })).json()).toMatchObject({ ticketKey: "LI-1" });
+    expect(await (await post("/api/tasks", { ticketKey: "PROJ-1" })).json()).toMatchObject({ ticketKey: "PROJ-1" });
     expect(await (await post("/api/tasks", { ticketKey: "#3" })).json()).toMatchObject({ error: expect.stringContaining("not a Jira ticket key") });
     const plan = await post("/api/plans", { source: "#3" });
     expect(plan.status).toBe(409);

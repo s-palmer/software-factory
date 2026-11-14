@@ -54,7 +54,7 @@ registerUnit<EnvPanelProps>({
       id: "task-holds",
       description: "A task's browser check runs it, and another task waits.",
       props: {
-        status: { ...base, up: true, lease: taskLease, log: "VITE ready on http://localhost:5173", waiting: [{ taskId: "t-9", ticketKey: "LI-7", title: "Sort columns", reason: "Another task is using the local app." }] },
+        status: { ...base, up: true, lease: taskLease, log: "VITE ready on http://localhost:5173", waiting: [{ taskId: "t-9", ticketKey: "PROJ-7", title: "Sort columns", reason: "Another task is using the local app." }] },
         onStart,
         onStop,
       },

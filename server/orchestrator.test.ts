@@ -272,11 +272,11 @@ describe("tickets", () => {
 
   it("leaves a ticket behind MCP to the agents, with the tracker's tools", async () => {
     make({ tracker: { label: "Jira", name: "jira", server: { type: "http", url: "https://example.test/mcp" }, tools: ["getJiraIssue"], instructions: "Use getJiraIssue." } });
-    const task = await newTask({ ticketKey: "LI-9", title: "LI-9" });
+    const task = await newTask({ ticketKey: "PROJ-9", title: "PROJ-9" });
     await drive(task.id);
     expect(fakes.issuesRead).toEqual([]);
     const scoping = fakes.calls.find((c) => c.phase === "scoping")!;
-    expect(scoping.prompt).toContain("Jira ticket LI-9. Use getJiraIssue.");
+    expect(scoping.prompt).toContain("Jira ticket PROJ-9. Use getJiraIssue.");
     expect(scoping.call.allowedTools).toContain("mcp__jira__getJiraIssue");
   });
 

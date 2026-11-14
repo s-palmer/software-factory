@@ -3,7 +3,7 @@
 - Repo: https://github.com/mattpocock/skills
 - Commit SHA: 5863806dd4e15c63174bee4e7515a4256792ecfa
 - Date fetched: 2026-11-13
-- Licence: MIT License
+- Licence: MIT License (full text in LICENSE-mattpocock-skills)
 - Copyright: Copyright (c) 2026 Matt Pocock
 
 ## Skills fetched (byte-for-byte, full folder)
