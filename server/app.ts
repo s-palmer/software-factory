@@ -1,4 +1,6 @@
 /** HTTP API for the dashboard (and, later, the orchestrator). Pure: no filesystem or ports, so it's testable in-process. */
+import { rmSync } from "node:fs";
+import { resolve } from "node:path";
 import { Hono } from "hono";
 import { ArtifactInput, CreateTaskInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, type RunDetail } from "../shared/api";
 import { ACTOR_HEADER, ActorSchema, isAgent, type Actor } from "../shared/actor";
@@ -15,9 +17,9 @@ import type { LocalEnv } from "./environment";
 
 export function createApp(
   db: FactoryDb,
-  opts: { runner?: TestRunner; policy?: RiskPolicy; orchestrator?: Orchestrator; planner?: Planner; tracker?: TrackerConfig; env?: LocalEnv } = {},
+  opts: { runner?: TestRunner; policy?: RiskPolicy; orchestrator?: Orchestrator; planner?: Planner; tracker?: TrackerConfig; env?: LocalEnv; artifactRoot?: string } = {},
 ) {
-  const { runner, policy, orchestrator, planner, env } = opts;
+  const { runner, policy, orchestrator, planner, env, artifactRoot } = opts;
   const tracker = opts.tracker ?? { type: "github" as const };
   const app = new Hono<{ Variables: { actor: Actor } }>();
 
@@ -198,6 +200,17 @@ export function createApp(
     const parsed = ArtifactInput.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
     return c.json(await db.addArtifact(task.id, parsed.data), 201);
+  });
+
+  /** A person removes a screenshot or other artifact: its record and, when it is under the artifact root, its file. */
+  app.delete("/api/artifacts/:id", async (c) => {
+    const artifact = await db.deleteArtifact(c.req.param("id"), c.get("actor"));
+    if (!artifact) return c.json({ error: "Artifact not found" }, 404);
+    if (artifactRoot) {
+      const file = resolve(artifactRoot, artifact.path);
+      if (file.startsWith(`${resolve(artifactRoot)}/`)) rmSync(file, { force: true });
+    }
+    return c.json(artifact);
   });
 
   app.post("/api/tasks/:id/feedback", async (c) => {

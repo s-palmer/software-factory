@@ -13,7 +13,7 @@ flowchart LR
 
     PM -- "factory add --ticket #12 --after #11" --> F
     PM -- "factory events --since N" --> F
-    F -- "draft PR, then ready + risk label when CI is green" --> GH
+    F -- "draft PR, then ready when CI is green (risk in the footer)" --> GH
     M -- "reads ready factory PRs" --> GH
     M -- "merges" --> GH
     M -- "factory sync <task> (conflicts)" --> F
@@ -22,7 +22,7 @@ flowchart LR
 
 1. You give the factory work as ticket keys, with the tickets each one waits for. A key is a GitHub issue such as `#12`, or a Jira or Linear key such as `PROJ-12`.
 2. The factory builds each ticket on its own: scope, design, tests, code, review, browser check and pull request. Each stage is a headless agent with its own model, and plain code checks every result. Agents' questions go to a decider agent, never to a person.
-3. The factory never merges. It opens a draft pull request and fixes failing CI and requested changes itself. Once CI is green it marks the pull request ready for review, with a `risk:low` or `risk:high` label.
+3. The factory never merges. It opens a draft pull request and fixes failing CI and requested changes itself. Once CI is green it marks the pull request ready for review. Its risk level, `low` or `high`, is in the footer and in the `pr_ready` event; the factory adds no labels.
 4. Your merge agent merges ready pull requests. If one conflicts with the base, the merge agent asks the factory to move the change onto the base (`factory sync`). The factory resolves the conflicts with its own agents and gate.
 5. You follow progress through the event feed, or by reading tasks.
 
@@ -150,7 +150,7 @@ The API limits agents (exit 5) to one retry per escalation reason and two change
 On GitHub, a factory pull request:
 
 - starts as a draft. Ignore it until the factory marks it ready;
-- is marked ready for review, with the labels `factory` and `risk:low` or `risk:high`, when CI is green and the factory has nothing left to fix;
+- is marked ready for review when CI is green and the factory has nothing left to fix. The factory adds no labels; the risk level is in the footer and in the `pr_ready` event;
 - has a "Software factory" footer in its body: the task id, the ticket, the risk and its reasons, the cost, the decider's decisions, the criteria not checked in the browser and the follow-ups;
 - goes back to draft whenever the factory pushes again (a fix, or a resolved conflict), and is marked ready again once CI is green.
 
@@ -163,7 +163,7 @@ What the merge agent can do:
 | Resolve conflicts | `factory sync <task>`, or nothing, because the factory also notices a conflicting pull request itself | Applies the change again onto the latest base, as one patch. If it applies cleanly, the factory runs the gate and force-pushes with a lease. If there are conflicts, implement resolves the markers and the whole pipeline runs again |
 | Refuse | Close the pull request | The task escalates ("closed without a merge") |
 
-A `risk:high` pull request is large, or touches something the risk policy says a person should look at: the policy itself, tests, build configuration, dependencies, authentication, payments, migrations, secrets or CI. The reasons are in the footer and in `context.risk`. Whether to merge it is the merge agent's call.
+A high-risk pull request is large, or touches something the risk policy says a person should look at: the policy itself, tests, build configuration, dependencies, authentication, payments, migrations, secrets or CI. The reasons are in the footer and in `context.risk`. Whether to merge it is the merge agent's call.
 
 ## 5. Control
 

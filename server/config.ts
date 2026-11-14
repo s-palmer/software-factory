@@ -93,11 +93,12 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
   // A signed-in profile runs in Google Chrome: Chrome encrypts its saved sign-in with a key only Chrome can read.
   const mcpBin = join(FACTORY_ROOT, "node_modules/.bin/playwright-mcp");
   const browserArgs = browserProfile ? `--user-data-dir ${JSON.stringify(browserProfile)}` : `--isolated --executable-path ${JSON.stringify(chromium)}`;
-  const browserMcp = {
+  // Each run gets its own output folder: screenshots go there, never into the worktree.
+  const browserMcp = (outputDir: string) => ({
     command: "sh",
-    args: ["-c", `cd ${JSON.stringify(home)} && exec ${JSON.stringify(mcpBin)} --headless --ignore-https-errors ${browserArgs}`],
+    args: ["-c", `cd ${JSON.stringify(home)} && exec ${JSON.stringify(mcpBin)} --headless --ignore-https-errors ${browserArgs} --output-dir ${JSON.stringify(outputDir)}`],
     ...(libPath ? { env: { LD_LIBRARY_PATH: libPath } } : {}),
-  };
+  });
   const start = env.FACTORY_ENV_START ?? project.app.start;
   // Your own skills replace the factory's (Matt Pocock's skills by default).
   const skillsDir = project.skills.dir ? resolve(repo, project.skills.dir) : SKILLS_DIR;

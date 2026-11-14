@@ -2,7 +2,7 @@
 
 The software factory turns tickets into tested pull requests with no person in the loop. You install it once and point it at a TypeScript repository that uses Vitest or Jest. Tickets can live in GitHub issues, Jira, Linear or any tracker with an MCP server.
 
-A headless Claude Code agent (one that runs with no person at the keyboard) does each stage of the work. Plain TypeScript code moves each task from stage to stage and checks every result before the task goes on. The factory never merges. It opens a draft pull request, fixes failing CI and requested changes itself, and then marks the pull request ready with a `risk:low` or `risk:high` label. A person, or your own merge agent, decides what to merge.
+A headless Claude Code agent (one that runs with no person at the keyboard) does each stage of the work. Plain TypeScript code moves each task from stage to stage and checks every result before the task goes on. The factory never merges. It opens a draft pull request, fixes failing CI and requested changes itself, and then marks the pull request ready for review, with its risk level in the description. A person, or your own merge agent, decides what to merge.
 
 The agents follow skills, one or more per stage. By default these are [Matt Pocock's skills](https://github.com/mattpocock/skills) (MIT licence), copied into `.claude/skills/`. You can replace them with your team's own skills, for some stages or for all of them. See [Skills](#skills).
 
@@ -30,7 +30,7 @@ For React apps there is optional runtime verification. The test agent writes a `
 
 Each agent works in its own git worktree, and cannot read or write files outside it. Its shell commands, and the tests they start, run in Claude Code's operating-system sandbox. They cannot read the rest of your home folder: other projects, credentials and the factory's own data are out of reach. They have no network unless you allow a host.
 
-A pull request gets `risk:high` when it is too large or changes a path in the risk policy: tests, build configuration, dependencies, authentication, payments, migrations, secrets or CI.
+A pull request is high risk when it is too large or changes a path in the risk policy: tests, build configuration, dependencies, authentication, payments, migrations, secrets or CI. The factory adds no labels to your repository; the risk and its reasons are in the pull request's footer and in the task.
 
 ## How it works
 
@@ -43,7 +43,7 @@ factory.config.json  ---- read ---->  API + orchestrator (127.0.0.1:8787) <---- 
                                          +--> claude -p per stage: the skills, sandboxed to the worktree,
                                          |      the tracker's MCP server (Jira, Linear) with read tools only
                                          +--> Playwright MCP + Chromium for the browser check
-                                         +--> gh: GitHub issues, branch, draft pull request, labels, CI status
+                                         +--> gh: GitHub issues, branch, draft pull request, CI status
 ```
 
 The factory keeps its state in `~/.factory/<repo name>/`, outside both repositories, and works only in its own worktrees. Your working copy is never touched. Each task branches from the base branch (`main` unless you set `base`), and its pull request targets that branch.
@@ -66,7 +66,7 @@ The machine that runs the factory needs:
 
 - Node.js 24 or later (`.nvmrc` pins 24).
 - pnpm 9 or later, and git.
-- The GitHub CLI (`gh`), logged in with `gh auth login`. It must be able to push branches and to create pull requests and labels in your repository, and to read issues if your tickets are GitHub issues.
+- The GitHub CLI (`gh`), logged in with `gh auth login`. It must be able to push branches and create pull requests in your repository, and to read issues if your tickets are GitHub issues.
 - Claude Code (`claude`) 2.1.314 or later, installed and logged in. Every stage runs it headless. Agent runs cost money: each stage has a budget, and `factory status` shows the total spent.
 - On Linux, `bubblewrap` and `socat` for the sandbox. macOS needs nothing extra.
 - For Jira or Linear, the tracker's MCP server, added to Claude Code and signed in. `factory init` prints the commands.
@@ -321,16 +321,33 @@ Environment variables override the file. They also set where the factory keeps i
 
 Run one factory server per repository; each repository gets its own `~/.factory/<repo name>/`. To work on two repositories at once, start a second server with its own `FACTORY_REPO` and `API_PORT`, and its dashboard with the same `API_PORT` (and `pnpm dev --port <port>`). Point the CLI at it with `FACTORY_URL`.
 
-### Sharing the dashboard
+### Running the factory on a remote machine
 
-The API has no authentication and listens on 127.0.0.1 only. To reach the dashboard from another machine, set a password and use a tunnel:
+You can run the factory on a server instead of your laptop, for example a team build machine that keeps working when your laptop is closed. You drive it with the CLI over SSH, and open the dashboard through a Cloudflare quick tunnel, behind a password.
 
-```sh
-DASHBOARD_PASSWORD=<secret> pnpm dev      # login user: factory
-cloudflared tunnel --url http://localhost:5173
-```
+On the server:
 
-Never run a tunnel without `DASHBOARD_PASSWORD`.
+1. Install the factory as in [Getting started](#getting-started). On Linux, also install `bubblewrap` and `socat` for the sandbox. Chromium needs some system libraries: run `pnpm exec playwright install-deps chromium`, or, without root, `bin/setup-browser-libs` once and prefix browser commands with `bin/with-browser-libs` (see `claude.md`).
+2. Log in to the tools the factory uses, as the user that will run it: `gh auth login`, and `claude` for Claude Code. For Jira or Linear, add the MCP server and sign in with `/mcp`. Sign-in opens a web page, so the server needs a way to open one, or a way to finish the sign-in from your own browser; how Claude Code handles this on a machine with no browser is not covered here.
+3. Run `factory init` in a clone of your repository on the server.
+4. Start the factory in a session that outlives your SSH connection, such as `tmux`, with a password for the dashboard:
+
+   ```sh
+   FACTORY_REPO=/srv/your-app pnpm factory:server        # API and orchestrator
+   pnpm build && DASHBOARD_PASSWORD=<secret> pnpm preview   # dashboard on :4173, behind the password
+   cloudflared tunnel --url http://localhost:4173          # prints a https://<words>.trycloudflare.com address
+   ```
+
+   `pnpm dev` also works, on port 5173. `pnpm preview` serves the built dashboard, which suits a server that runs for days.
+5. Open the `trycloudflare.com` address in your browser and log in as `factory` with the password.
+
+Things to know:
+
+- The API listens on 127.0.0.1 only and has no password of its own. The browser reaches it through the dashboard's proxy, so the same password protects it. Never run a tunnel without `DASHBOARD_PASSWORD`; without it, the dashboard also refuses tunnel hosts.
+- A quick tunnel gets a new random address each time `cloudflared` starts. For a fixed address on your own domain, use a named Cloudflare tunnel; the dashboard then needs that host name added to `allowedHosts` in `vite.config.ts`, which accepts only `*.trycloudflare.com` today.
+- Run the CLI on the server, over SSH: `factory status`, `factory add --ticket ...`. Or point a local CLI at the server's API through an SSH port forward, with `FACTORY_URL`.
+- A signed-in browser check (`app.browserProfile`) needs a Chrome profile in which a person signed in to the app. Make it on the server itself: Chrome protects a profile's saved sign-in with the operating system's key store, so a profile copied from another machine is unlikely to keep its sign-in (untested). On a server with no screen, signing in needs a remote desktop or similar. Without a profile, the check runs signed out.
+- Agent runs spend money on the account `claude` is logged in to on the server.
 
 ## Developing the factory
 

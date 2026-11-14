@@ -20,6 +20,8 @@ export interface PhaseContext {
   browserPlan: BrowserStep[];
   /** The Playwright MCP server entry for the browser check (a pinned package, started outside the repo). */
   browserMcp?: Record<string, unknown> | undefined;
+  /** Where the browser run saves its screenshots. The factory moves any it finds elsewhere. */
+  screenshotDir?: string | undefined;
   /** Pre-tool-use hook settings that refuse edits to locked files (implement only). */
   settings?: object | undefined;
   /** The base branch on `origin` that review and PR text diff against. Default "main". */
@@ -378,7 +380,7 @@ const PROMPTS: Record<AgentStage, (task: Task, ctx: PhaseContext) => string> = {
     `# Phase: review\n\nYou can only read. Review the change against the base branch at its merge base (see How to work). Check correctness, integration risk and simplicity against the ticket and \`${docPaths(task).solution}\`.\n\nReturn \`approve\` with no blocking items, or \`request_changes\` with each blocking item as \`file:line\` and the problem. Style preferences are not blocking.\n\n${ticket(task, ctx)}`,
   browser_check: (task, ctx) => {
     const plan = ctx.browserPlan.map((p, i) => `${i + 1}. ${p.criterion}\n   Page: ${p.path}\n   Steps: ${p.steps}`).join("\n");
-    return `# Phase: browser check\n\nThe app runs at ${ctx.browserUrl}. Check each acceptance criterion in the browser, following the plan. Explore only when a step fails.\n\nTake one screenshot per criterion and return its file name. Mark a criterion \`untestable\` when the local app lacks the role or data it needs, and name the test that covers it. Set \`blocked\` only when the app does not load or sign-in fails.\n\n## Plan\n\n${plan || "No plan: check the acceptance criteria in the solution doc."}\n\n${ticket(task, ctx)}`;
+    return `# Phase: browser check\n\nThe app runs at ${ctx.browserUrl}. Check each acceptance criterion in the browser, following the plan. Explore only when a step fails.\n\nTake one screenshot per criterion${ctx.screenshotDir ? `, saved with an absolute file name in \`${ctx.screenshotDir}\`,` : ""} and return its file name. Never save a screenshot in the repository. Mark a criterion \`untestable\` when the local app lacks the role or data it needs, and name the test that covers it. Set \`blocked\` only when the app does not load or sign-in fails.\n\n## Plan\n\n${plan || "No plan: check the acceptance criteria in the solution doc."}\n\n${ticket(task, ctx)}`;
   },
   pr: (task, ctx) =>
     `# Phase: pull request text\n\nWrite the pull request title and body for the change on this branch (read it against the merge base, see How to work). Explain what changed and why, and how it was checked. Do not add an attribution line; the factory adds its own footer.\n\n${ticket(task, ctx)}`,
@@ -435,6 +437,32 @@ export function deciderCall(task: Task, ctx: PhaseContext, stage: AgentStage, qu
     settings: ctx.isolation && isolationSettings(ctx.isolation),
     outputSchema: SCHEMAS.decider,
     maxBudgetUsd: BUDGETS.decider,
+    model: ctx.model,
+  };
+}
+
+/** The "before" pictures: the same criteria on the base branch, photographed, not judged. */
+export const BEFORE_SCHEMA = obj(
+  { summary: str, criteria: { type: "array", items: obj({ criterion: str, screenshots: strs, note: str }, ["criterion", "screenshots", "note"]) } },
+  ["summary", "criteria"],
+);
+
+/**
+ * A capture-only browser run on the merge base, after a passing check: the reviewer sees each criterion before
+ * and after the change. It judges nothing, so it is evidence, not a gate.
+ */
+export function beforeCaptureCall(task: Task, ctx: PhaseContext, criteria: string[]): ClaudeCall {
+  const plan = ctx.browserPlan.map((p, i) => `${i + 1}. ${p.criterion}\n   Page: ${p.path}\n   Steps: ${p.steps}`).join("\n");
+  const prompt = `# Phase: before pictures\n\nThe app at ${ctx.browserUrl} runs the base branch, before the change. For each criterion below, open the screen where it applies, reach the state the plan describes, and take one screenshot${ctx.screenshotDir ? `, saved with an absolute file name in \`${ctx.screenshotDir}\`` : ""}. Never save a screenshot in the repository. Do not judge whether a criterion passes: this is only the "before" picture. Return each criterion exactly as written. If the screen or state does not exist on the base, return no screenshot and say so in \`note\`.\n\n## Criteria\n\n${criteria.map((c) => `- ${c}`).join("\n")}\n\n## Plan\n\n${plan || "No plan: use the acceptance criteria."}\n\n${ticket(task, ctx)}`;
+  const tracker = trackerAccess(ctx);
+  return {
+    prompt,
+    allowedTools: [...READ, "mcp__playwright", ...tracker.tools],
+    disallowedTools: denyTools(ctx.tools),
+    mcpServers: { ...tracker.servers, ...(ctx.browserMcp ? { playwright: ctx.browserMcp } : {}) },
+    settings: ctx.isolation && isolationSettings(ctx.isolation),
+    outputSchema: BEFORE_SCHEMA,
+    maxBudgetUsd: BUDGETS.browser_check,
     model: ctx.model,
   };
 }

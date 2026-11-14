@@ -30,7 +30,6 @@ export function App() {
         <a href="/">Tasks</a>
         <a href="/env">Environment</a>
         <a href="/models">Models</a>
-        <a href="/runs">Test runs</a>
       </nav>
       <main>{route(parts)}</main>
     </>

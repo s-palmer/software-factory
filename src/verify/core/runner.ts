@@ -20,6 +20,23 @@ export interface Mounted {
 /** Let React flush effects and state updates scheduled by events. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Waits until `container` has had a tick with no DOM changes, at most `maxTicks` ticks. An act step can start async
+ * work (an awaited callback, then a state update), and under load one tick is not always enough for it to land.
+ */
+async function quiet(container: HTMLElement, maxTicks = 50): Promise<void> {
+  for (let i = 0; i < maxTicks; i++) {
+    let changed = false;
+    const observer = new MutationObserver(() => {
+      changed = true;
+    });
+    observer.observe(container, { subtree: true, childList: true, attributes: true, characterData: true });
+    await settle();
+    observer.disconnect();
+    if (!changed) return;
+  }
+}
+
 export function makeActContext(root: HTMLElement): ActContext {
   return {
     root,
@@ -64,6 +81,7 @@ export async function mountFixture<P>(
     await settle();
     if (fixture.act) await fixture.act(makeActContext(container));
     await settle();
+    await quiet(container);
   } catch (err) {
     unmount();
     throw err;

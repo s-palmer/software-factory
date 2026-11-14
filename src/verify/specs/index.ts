@@ -14,3 +14,4 @@ import "./OrchestratorSwitch.verify";
 import "./TaskNotes.verify";
 import "./WaitingFor.verify";
 import "./EnvPanel.verify";
+import "./BeforeAfter.verify";

@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Task } from "../shared/api";
 import type { TaskStatus } from "../shared/lifecycle";
@@ -31,7 +31,7 @@ class Fakes implements Effects {
   syncs = 0;
   forced: boolean[] = [];
   mergeWhenReady = true;
-  ready: Array<{ pr: number; ready: boolean; labels: string[] }> = [];
+  ready: Array<{ pr: number; ready: boolean }> = [];
   envStarts = true;
   envAlreadyUp = false;
   envUp = false;
@@ -44,12 +44,20 @@ class Fakes implements Effects {
     return this;
   }
 
-  async claude(call: ClaudeCall, opts: { runDir: string }): Promise<ClaudeResult> {
+  async claude(call: ClaudeCall, opts: { runDir: string; cwd: string }): Promise<ClaudeResult> {
     const phase = /^# Phase: (.+)$/m.exec(call.prompt)?.[1] as Phase;
     this.calls.push({ phase, model: call.model, prompt: call.prompt, call });
-    const out = this.scripts.get(phase)?.shift() ?? DEFAULTS[phase];
+    const out = (this.scripts.get(phase)?.shift() ?? DEFAULTS[phase])!;
     const logPath = join(opts.runDir, "stream.jsonl");
     if ("fail" in out) return { ok: false, subtype: String(out.fail), costUsd: 0.05, turns: 1, sessionId: "s", output: null, text: "stopped", logPath };
+    // Like the Playwright server: a relative screenshot name lands in the worktree.
+    for (const c of (out as { criteria?: Array<{ screenshots?: string[] }> }).criteria ?? []) {
+      for (const name of c.screenshots ?? []) {
+        const at = name.startsWith("/") ? name : join(opts.cwd, name);
+        mkdirSync(dirname(at), { recursive: true });
+        writeFileSync(at, "png");
+      }
+    }
     return { ok: true, subtype: "success", costUsd: 0.25, turns: 3, sessionId: "s", output: out, text: "", logPath };
   }
   async createWorktree(task: Task) {
@@ -61,6 +69,14 @@ class Fakes implements Effects {
     this.verifyCalls.push({ units: opts.units });
     const results = this.verifyResults.filter((r) => opts.units.includes(r.unit));
     return { results, missing: opts.units.filter((u) => !results.some((r) => r.unit === u)) };
+  }
+  baseCheckouts = 0;
+  async baseCheckout() {
+    this.baseCheckouts++;
+    return "/tmp/wt/base";
+  }
+  async untrackedFiles(worktree: string) {
+    return existsSync(worktree) ? readdirSync(worktree).filter((f) => !f.startsWith(".")) : [];
   }
   issuesRead: string[] = [];
   async fetchIssue(_cwd: string, key: string) {
@@ -103,8 +119,8 @@ class Fakes implements Effects {
   async prStatus(): Promise<PrStatus> {
     return { ...this.pr };
   }
-  async setReady(_w: string, pr: number, ready: boolean, labels: string[]) {
-    this.ready.push({ pr, ready, labels });
+  async setReady(_w: string, pr: number, ready: boolean) {
+    this.ready.push({ pr, ready });
     this.pr.isDraft = !ready;
     // The merge agent (outside the factory) merges a ready PR.
     if (ready && this.mergeWhenReady) this.pr.state = "MERGED";
@@ -124,7 +140,7 @@ class Fakes implements Effects {
   };
 }
 
-const DEFAULTS: Record<Phase, Record<string, unknown>> = {
+const DEFAULTS: Record<string, Record<string, unknown>> = {
   scoping: { title: "Real title", summary: "Scoped.", solutionDoc: "docs/designs/x-solution.md", questions: [], needsBrowser: true, ticketType: "task" },
   design: {
     summary: "Designed.",
@@ -138,6 +154,7 @@ const DEFAULTS: Record<Phase, Record<string, unknown>> = {
   implement: { summary: "Implemented.", questions: [], followUps: ["Paginate later"] },
   review: { verdict: "approve", summary: "Looks right.", blocking: [] },
   "browser check": { summary: "All good.", blocked: false, criteria: [{ criterion: "The list shows posts", pass: true, evidence: "3 posts shown", screenshots: [] }] },
+  "before pictures": { summary: "Captured.", criteria: [{ criterion: "The list shows posts", screenshots: [], note: "" }] },
   "pull request text": { title: "Show posts", body: "Adds the list.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" },
   decider: { summary: "Answered.", decisions: [] },
 };
@@ -156,6 +173,7 @@ function make(overrides: Partial<OrchestratorConfig> = {}) {
     guardScript: "/factory/server/guard.mjs",
     envStartTimeoutMs: 50,
     browserBaseUrl: "http://127.0.0.1:4321",
+    browserMcp: (outputDir: string) => ({ outputDir }),
     tickMs: 1000,
     now: () => new Date(clock),
     ...overrides,
@@ -207,8 +225,9 @@ describe("happy path", () => {
     const done = await get(task.id);
     expect(done).toMatchObject({ title: "Real title", prNumber: 42, branch: expect.stringMatching(/^factory\//) });
     expect(done.context).toMatchObject({ lockedFiles: ["src/thing.test.ts"], risk: { level: "low" }, followUps: ["Paginate later"] });
-    expect(fakes.ready).toEqual([{ pr: 42, ready: true, labels: ["factory", "risk:low"] }]);
-    expect(fakes.envStopped).toEqual([4242]);
+    expect(fakes.ready).toEqual([{ pr: 42, ready: true }]);
+    // The task's app for the check, then the base's app for the "before" pictures.
+    expect(fakes.envStopped).toEqual([4242, 4242]);
     expect(await db.getLease("env")).toBeNull();
   });
 
@@ -219,8 +238,9 @@ describe("happy path", () => {
     expect(runs.filter((r) => r.kind === "agent").map((r) => r.stage).sort()).toEqual(
       ["browser_check", "design", "implementing", "pr", "reviewing", "scoping", "test_writing"].sort(),
     );
-    expect(runs.map((r) => r.kind)).toEqual(expect.arrayContaining(["worktree", "red-check", "gate", "publish"]));
-    expect((await get(task.id)).costUsd).toBeCloseTo(7 * 0.25);
+    expect(runs.map((r) => r.kind)).toEqual(expect.arrayContaining(["worktree", "red-check", "gate", "publish", "before"]));
+    // Seven stage agents and the "before" pictures.
+    expect((await get(task.id)).costUsd).toBeCloseTo(8 * 0.25);
   });
 
   it("writes the factory footer once, without the agent's attribution line", async () => {
@@ -268,6 +288,66 @@ describe("tickets", () => {
     expect(s.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([`/fh/worktrees/${task.id}`, "/code/app/.git"]));
     expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/fh", "/code/app"]));
     expect(s.hooks).toBeDefined();
+  });
+});
+
+describe("browser check screenshots", () => {
+  const shots = (task: string, side: string) => db.getTaskDetail(task).then((d) => d!.artifacts.filter((a) => a.label.startsWith(side)));
+
+  it("moves screenshots out of the worktree into the task, labelled before and after, and never commits them", async () => {
+    fakes.script("browser check", {
+      summary: "ok",
+      blocked: false,
+      criteria: [{ criterion: "The list shows posts", pass: true, evidence: "3 posts", screenshots: ["after-list.png"] }],
+    });
+    fakes.script("before pictures" as Phase, { summary: "ok", criteria: [{ criterion: "The list shows posts", screenshots: ["before-list.png"], note: "" }] });
+    const task = await newTask();
+    let committed: string[] = [];
+    const commit = fakes.commitAndPush.bind(fakes);
+    fakes.commitAndPush = async (w, b, m, f) => {
+      committed = await fakes.untrackedFiles(w);
+      return commit(w, b, m, f);
+    };
+    await drive(task.id);
+    const worktree = (await get(task.id)).worktree!;
+    expect(existsSync(join(worktree, "after-list.png"))).toBe(false);
+    expect(committed.filter((f) => f.endsWith(".png"))).toEqual([]);
+    const after = await shots(task.id, "AFTER");
+    expect(after.map((a) => a.label)).toEqual(["AFTER: PASS: The list shows posts"]);
+    expect(existsSync(join(artifactRoot, after[0]!.path))).toBe(true);
+    expect((await shots(task.id, "BEFORE")).map((a) => a.label)).toEqual(["BEFORE: The list shows posts"]);
+    expect(fakes.baseCheckouts).toBe(1);
+    const before = fakes.calls.find((c) => c.phase === ("before pictures" as Phase))!;
+    expect(before.prompt).toContain("Do not judge");
+    expect((before.call.mcpServers.playwright as { outputDir: string } | undefined)?.outputDir).toMatch(/screenshots$/);
+  });
+
+  it("still moves on when the app does not start on the merge base", async () => {
+    const task = await newTask();
+    let starts = 0;
+    const start = fakes.env.start;
+    // The second start is the base: it exits at once.
+    fakes.env.start = () => (++starts === 2 ? ((fakes.envStarts = false), start()) : start());
+    expect(await drive(task.id)).toContain("done");
+    const events = (await db.getTaskDetail(task.id))!.events.map((e) => e.type);
+    expect(events).toContain("before_capture_skipped");
+  });
+
+  it("moves an image an agent left in the worktree before it commits", async () => {
+    // The PR agent leaves an image in the worktree, as a browser tool might.
+    const claude = fakes.claude.bind(fakes);
+    fakes.claude = async (call, opts) => {
+      if (call.prompt.startsWith("# Phase: pull request text")) {
+        mkdirSync(opts.cwd, { recursive: true });
+        writeFileSync(join(opts.cwd, "stray.png"), "png");
+      }
+      return claude(call, opts);
+    };
+    const task = await newTask();
+    await drive(task.id);
+    const worktree = (await get(task.id)).worktree!;
+    expect(existsSync(join(worktree, "stray.png"))).toBe(false);
+    expect((await shots(task.id, "Left in the worktree")).map((a) => a.label)).toEqual(["Left in the worktree: stray.png"]);
   });
 });
 
@@ -528,7 +608,7 @@ describe("after the PR: the factory never merges", () => {
     fakes.mergeWhenReady = false;
     const task = await newTask();
     expect((await drive(task.id)).at(-1)).toBe("awaiting_merge");
-    expect(fakes.ready).toEqual([{ pr: 42, ready: true, labels: ["factory", "risk:low"] }]);
+    expect(fakes.ready).toEqual([{ pr: 42, ready: true }]);
     expect((await db.getTaskDetail(task.id))!.events.map((e) => e.type)).toContain("pr_ready");
     // Still open: nothing more to do. Merged by the merge agent: done.
     expect((await drive(task.id)).at(-1)).toBe("awaiting_merge");
@@ -536,13 +616,15 @@ describe("after the PR: the factory never merges", () => {
     expect((await drive(task.id)).at(-1)).toBe("done");
   });
 
-  it("labels a high-risk change for the merge agent instead of stopping", async () => {
+  it("marks a high-risk change ready for the merge agent, with the risk in the footer and the event, and no labels", async () => {
     fakes.mergeWhenReady = false;
     fakes.changes = [{ path: "factory.config.json", status: "modified", added: 1, removed: 1 }];
     const task = await newTask();
     expect((await drive(task.id)).at(-1)).toBe("awaiting_merge");
-    expect(fakes.ready[0]!.labels).toEqual(["factory", "risk:high"]);
+    expect(fakes.ready).toEqual([{ pr: 42, ready: true }]);
     expect(fakes.prBodies[0]).toContain("Changes the policy");
+    const ready = (await db.getTaskDetail(task.id))!.events.find((e) => e.type === "pr_ready");
+    expect(ready?.payload).toMatchObject({ risk: "high" });
   });
 
   it("waits while CI is pending", async () => {

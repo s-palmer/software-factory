@@ -64,17 +64,18 @@ describe("project config", () => {
   });
 
   it("runs the browser check in Chrome on a signed-in profile when one is set", () => {
-    const mcp = loadConfig(env(repo({ app: { browserProfile: "~/.factory/browser-profile" } }))).orchestrator.browserMcp as { args: string[] };
+    const mcp = loadConfig(env(repo({ app: { browserProfile: "~/.factory/browser-profile" } }))).orchestrator.browserMcp!("/out") as { args: string[] };
     const command = mcp.args.join(" ");
     expect(command).toContain(`--user-data-dir "${join(homedir(), ".factory/browser-profile")}"`);
     expect(command).not.toContain("--isolated");
     expect(command).not.toContain("--executable-path");
-    const fromEnv = loadConfig(env(repo(), { FACTORY_BROWSER_PROFILE: "/profiles/admin" })).orchestrator.browserMcp as { args: string[] };
+    const fromEnv = loadConfig(env(repo(), { FACTORY_BROWSER_PROFILE: "/profiles/admin" })).orchestrator.browserMcp!("/out") as { args: string[] };
     expect(fromEnv.args.join(" ")).toContain('--user-data-dir "/profiles/admin"');
   });
 
   it("always configures the browser tool server, with the factory's own pinned package and Chromium", () => {
-    const mcp = loadConfig(env(repo())).orchestrator.browserMcp as { args: string[] };
+    const mcp = loadConfig(env(repo())).orchestrator.browserMcp!("/runs/r1/screenshots") as { args: string[] };
+    expect(mcp.args.join(" ")).toContain('--output-dir "/runs/r1/screenshots"');
     expect(mcp.args.join(" ")).toMatch(/node_modules\/\.bin\/playwright-mcp" --headless --ignore-https-errors --isolated --executable-path "\/bin\/chromium"/);
   });
 });

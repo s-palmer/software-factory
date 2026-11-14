@@ -6,6 +6,8 @@ import { AgentRunList } from "../components/AgentRunList";
 import { FeedbackPanel } from "../components/FeedbackPanel";
 import { ModelPicker, type ModelChange } from "../components/ModelPicker";
 import { PipelineProgress } from "../components/PipelineProgress";
+import { isEvidence } from "../../../shared/evidence";
+import { BeforeAfter } from "../components/BeforeAfter";
 import { ScreenshotGallery } from "../components/ScreenshotGallery";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatCost } from "../components/TaskTable";
@@ -31,8 +33,6 @@ export function TaskPage({ id }: { id: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [startingRun, setStartingRun] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   /** Shown immediately on change; cleared once saved (or rolled back on error). */
   const [pendingOverrides, setPendingOverrides] = useState<PhaseModels | null>(null);
@@ -69,18 +69,6 @@ export function TaskPage({ id }: { id: string }) {
     }
   }
 
-  async function runTests() {
-    setStartingRun(true);
-    setRunError(null);
-    try {
-      const run = await api.startRun({ taskId: id });
-      window.location.assign(`/runs/${encodeURIComponent(run.id)}`);
-    } catch (err) {
-      setRunError(err instanceof Error ? err.message : String(err));
-      setStartingRun(false);
-    }
-  }
-
   async function step() {
     setStepping(true);
     setStepNote(null);
@@ -93,6 +81,12 @@ export function TaskPage({ id }: { id: string }) {
     } finally {
       setStepping(false);
     }
+  }
+
+  async function removeArtifact(artifactId: string) {
+    if (!window.confirm("Remove this screenshot from the task? This deletes the file.")) return;
+    await api.removeArtifact(artifactId);
+    load();
   }
 
   async function sendFeedback(input: FeedbackInput) {
@@ -125,9 +119,6 @@ export function TaskPage({ id }: { id: string }) {
         <button type="button" className="step" onClick={step} disabled={stepping || task.status === "done"}>
           {stepping ? "Starting…" : "Run next step"}
         </button>
-        <button type="button" className="run-tests" onClick={runTests} disabled={startingRun}>
-          {startingRun ? "Starting…" : "▶ Run browser tests"}
-        </button>
       </header>
       <p className="task-page__facts">
         Attempts: <strong>{task.attempts}</strong> · Cost: <strong>{formatCost(task.costUsd)}</strong>
@@ -147,14 +138,14 @@ export function TaskPage({ id }: { id: string }) {
           <WaitingFor blockedBy={task.blockedBy} tasks={allTasks} />
         </p>
       )}
-      {runError && <p role="alert" className="error">{runError}</p>}
       {stepNote && <p className="task-page__step-note" role="status">{stepNote}</p>}
       <PipelineProgress status={task.status} needsBrowser={task.context.needsBrowser} />
       {task.description && <p className="task-page__description">{task.description}</p>}
       <TaskNotes context={task.context} />
       <div className="task-page__body">
         <div>
-          <ScreenshotGallery artifacts={artifacts} selectedId={selected} onSelect={setSelected} />
+          <BeforeAfter artifacts={artifacts} onRemove={removeArtifact} />
+          <ScreenshotGallery artifacts={artifacts.filter((a) => !isEvidence(a))} selectedId={selected} onSelect={setSelected} />
           <AgentRunList runs={agentRuns} />
         </div>
         <aside>

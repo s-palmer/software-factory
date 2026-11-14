@@ -5,8 +5,8 @@
  *
  * Every side effect goes through `Effects`, so tests drive the whole lifecycle with fakes.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative } from "node:path";
 import type { Task, TaskContext } from "../shared/api";
 import { afterFailure, afterSuccess, FACTORY_STAGES, type TaskStatus } from "../shared/lifecycle";
 import { modelFor, type Phase } from "../shared/models";
@@ -14,7 +14,7 @@ import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
 import type { FactoryDb } from "./db";
 import { runIsolation, type IsolationConfig } from "./isolation";
-import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules, type VerifyContext } from "./phases";
+import { beforeCaptureCall, deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules, type VerifyContext } from "./phases";
 
 export interface GateStep {
   name: string;
@@ -64,6 +64,10 @@ export type PrStatus = {
 export interface Effects {
   claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string> }): Promise<ClaudeResult>;
   createWorktree(task: Task): Promise<{ branch: string; worktree: string }>;
+  /** The project folder of a clean checkout at the merge base, with dependencies installed. */
+  baseCheckout(worktree: string): Promise<string>;
+  /** Files git does not track yet, relative to the worktree. */
+  untrackedFiles(worktree: string): Promise<string[]>;
   /** A GitHub issue's text, for the prompts. */
   fetchIssue(cwd: string, key: string): Promise<NonNullable<TaskContext["ticket"]>>;
   fileExists(worktree: string, path: string): boolean;
@@ -88,8 +92,8 @@ export interface Effects {
   createPr(worktree: string, branch: string, title: string, body: string): Promise<number>;
   updatePrBody(worktree: string, pr: number, body: string): Promise<void>;
   prStatus(worktree: string, pr: number): Promise<PrStatus>;
-  /** Mark the PR ready for review (CI green) with these labels, or back to draft while the factory works on it. */
-  setReady(worktree: string, pr: number, ready: boolean, labels: string[]): Promise<void>;
+  /** Mark the PR ready for review (CI green), or back to draft while the factory works on it. */
+  setReady(worktree: string, pr: number, ready: boolean): Promise<void>;
   env: EnvController;
 }
 
@@ -101,7 +105,8 @@ export interface OrchestratorConfig {
   guardScript: string;
   envStartTimeoutMs: number;
   browserBaseUrl: string;
-  browserMcp?: Record<string, unknown> | undefined;
+  /** The browser tool server for a run, given the folder its screenshots go to. */
+  browserMcp?: ((outputDir: string) => Record<string, unknown>) | undefined;
   /** The project's commands, for the agents' tool rules. */
   tools?: ToolRules | undefined;
   /** The phase skills folder. */
@@ -252,12 +257,14 @@ export class Orchestrator {
     task: Task,
     stage: AgentStage,
     opts: { phase?: Phase; kind?: string; browserUrl?: string; build?: (ctx: PhaseContext) => ClaudeCall } = {},
-  ): Promise<ClaudeResult> {
+  ): Promise<ClaudeResult & { runId: string; screenshotDir: string }> {
     const phase = opts.phase ?? stage;
     const model = modelFor(phase, await this.db.getDefaultModels(), task.phaseModels);
     const run = await this.db.startAgentRun(task.id, stage, opts.kind ?? "agent", model);
     const runDir = this.runDir(task, run.id);
     mkdirSync(runDir, { recursive: true });
+    const screenshotDir = join(runDir, "screenshots");
+    if (stage === "browser_check") mkdirSync(screenshotDir, { recursive: true });
     const context = task.context;
     let settings: object | undefined;
     if (stage === "implementing" && !opts.build) {
@@ -271,7 +278,8 @@ export class Orchestrator {
       lockedFiles: context.lockedFiles ?? [],
       browserUrl: opts.browserUrl ?? this.config.browserBaseUrl,
       browserPlan: (context.browserPlan ?? []) as BrowserStep[],
-      browserMcp: this.config.browserMcp,
+      browserMcp: stage === "browser_check" ? this.config.browserMcp?.(screenshotDir) : undefined,
+      screenshotDir: stage === "browser_check" ? screenshotDir : undefined,
       baseBranch: this.config.baseBranch,
       tools: this.config.tools,
       skillsDir: this.config.skillsDir,
@@ -297,7 +305,7 @@ export class Orchestrator {
       summary: result.ok ? summaryOf(result.output) : `${result.subtype}: ${result.text.slice(0, 500)}`,
       logPath: result.logPath,
     });
-    return result;
+    return { ...result, runId: run.id, screenshotDir };
   }
 
   private async agentStage(task: Task, stage: AgentStage): Promise<void> {
@@ -481,6 +489,8 @@ export class Orchestrator {
       }
       const browserUrl = new URL(task.context.browserPath ?? "/", this.config.browserBaseUrl).toString();
       const result = await this.runAgent(task, "browser_check", { browserUrl });
+      // The screenshots are evidence for the reviewer, kept with the task: never in the worktree or the commit.
+      await this.collectScreenshots(task, result.screenshotDir, result.output, "AFTER");
       if (!result.ok) return await this.escalate(task, `The browser run stopped: ${result.subtype}. ${result.text.slice(0, 500)}`);
       const output = result.output as { blocked: boolean; summary: string; criteria: Array<{ criterion: string; pass: boolean; untestable?: boolean; evidence: string }> };
       if (output.blocked) return await this.escalate(task, `The browser check was blocked: ${output.summary}`);
@@ -497,11 +507,79 @@ export class Orchestrator {
         );
       }
       await this.db.updateTask(task.id, { context: { feedback: [] } });
+      // The same criteria on the merge base, for a before-and-after view. Evidence, not a gate.
+      await this.effects.env.stop(pid);
+      pid = null;
+      pid = await this.captureBefore(task, output.criteria.map((c) => c.criterion), browserUrl);
       return await this.move(task, afterSuccess("browser_check"));
     } finally {
       if (pid !== null) await this.effects.env.stop(pid);
       await this.db.releaseLease(ENV_LEASE);
     }
+  }
+
+  /**
+   * Starts the app on the merge base and lets a capture-only agent photograph the criteria. Returns the app's pid
+   * so the caller stops it. Any failure is recorded and skipped: the task moves on without "before" pictures.
+   */
+  private async captureBefore(task: Task, criteria: string[], browserUrl: string): Promise<number | null> {
+    if (criteria.length === 0) return null;
+    let pid: number | null = null;
+    try {
+      const base = await this.effects.baseCheckout(task.worktree!);
+      const logPath = join(this.config.artifactRoot, "tasks", task.id, `env-before-${this.now().getTime()}.log`);
+      pid = this.effects.env.start(base, logPath);
+      await this.db.updateLeasePid(ENV_LEASE, pid, logPath);
+      const started = pid;
+      await waitUntil(async () => (await this.effects.env.isUp()) || !this.effects.env.isRunning(started), this.config.envStartTimeoutMs);
+      if (!(await this.effects.env.isUp())) {
+        await this.db.recordEvent(task.id, "before_capture_skipped", { reason: `The app did not start on the merge base. Log: ${logPath}` });
+        return pid;
+      }
+      const result = await this.runAgent(task, "browser_check", { kind: "before", browserUrl, build: (ctx) => beforeCaptureCall(task, ctx, criteria) });
+      const recorded = await this.collectScreenshots(task, result.screenshotDir, result.output, "BEFORE");
+      if (recorded === 0) await this.db.recordEvent(task.id, "before_capture_skipped", { reason: result.ok ? "No screenshots were taken on the merge base" : `The run stopped: ${result.subtype}` });
+    } catch (error) {
+      await this.db.recordEvent(task.id, "before_capture_skipped", { reason: (error as Error).message.slice(0, 500) });
+    }
+    return pid;
+  }
+
+  /**
+   * Moves the screenshots a browser run reports into its screenshot folder, wherever the browser saved them (the
+   * Playwright server can save a relative name in the worktree), and records each one with its criterion:
+   * "BEFORE: <criterion>" or "AFTER: PASS|FAIL: <criterion>". Returns how many it recorded.
+   */
+  private async collectScreenshots(task: Task, dir: string, output: unknown, side: "BEFORE" | "AFTER"): Promise<number> {
+    const criteria = ((output as { criteria?: Array<{ criterion: string; pass?: boolean; screenshots?: string[] }> } | null)?.criteria ?? []);
+    let recorded = 0;
+    for (const c of criteria) {
+      for (const name of c.screenshots ?? []) {
+        const from = [isAbsolute(name) ? name : join(dir, name), join(task.worktree!, name), join(task.worktree!, basename(name))].find((p) => existsSync(p));
+        if (!from) continue;
+        mkdirSync(dir, { recursive: true });
+        const to = join(dir, basename(name));
+        if (from !== to) renameSync(from, to);
+        const label = side === "BEFORE" ? `BEFORE: ${c.criterion}` : `AFTER: ${c.pass ? "PASS" : "FAIL"}: ${c.criterion}`;
+        await this.db.addArtifact(task.id, { kind: "screenshot", path: relative(this.config.artifactRoot, to), label });
+        recorded++;
+      }
+    }
+    return recorded;
+  }
+
+  /** Images the agents left in the worktree are evidence, not code: move them out before any commit. */
+  private async moveStrayImages(task: Task): Promise<void> {
+    const images = (await this.effects.untrackedFiles(task.worktree!)).filter((f) => /\.(png|jpe?g|webp)$/i.test(f));
+    if (images.length === 0) return;
+    const dir = join(this.config.artifactRoot, "tasks", task.id, "stray");
+    mkdirSync(dir, { recursive: true });
+    for (const f of images) {
+      const to = join(dir, basename(f));
+      renameSync(join(task.worktree!, f), to);
+      await this.db.addArtifact(task.id, { kind: "screenshot", path: relative(this.config.artifactRoot, to), label: `Left in the worktree: ${f}` });
+    }
+    await this.db.recordEvent(task.id, "stray_images_moved", { files: images });
   }
 
   /** Returns true when it sent the task back (a unit failed in the browser). */
@@ -540,11 +618,12 @@ export class Orchestrator {
     const run = await this.db.startAgentRun(task.id, "pr", "publish");
     try {
       const message = `${title}\n\nRaised by the software factory (task ${task.id}).\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n`;
+      await this.moveStrayImages(task);
       await this.effects.commitAndPush(worktree, branch, message, Boolean(task.context.forcePush));
       let pr = task.prNumber;
       if (pr) {
         // Back to draft while the change is not green again, so the merge agent does not merge it mid-fix.
-        await this.effects.setReady(worktree, pr, false, []);
+        await this.effects.setReady(worktree, pr, false);
         await this.effects.updatePrBody(worktree, pr, body);
       } else pr = await this.effects.createPr(worktree, branch, title, body);
       await this.db.updateTask(task.id, {
@@ -606,7 +685,7 @@ export class Orchestrator {
     if (status.checks === "pending") return this.wait(task);
     if (status.isDraft || !task.context.readyAt) {
       const risk = task.context.risk?.level === "high" ? "high" : "low";
-      await this.effects.setReady(worktree, pr, true, ["factory", `risk:${risk}`]);
+      await this.effects.setReady(worktree, pr, true);
       await this.db.updateTask(task.id, { context: { readyAt: this.now().toISOString() } });
       await this.db.recordEvent(task.id, "pr_ready", { pr, headSha: status.headSha, risk });
       return;
@@ -636,7 +715,7 @@ export class Orchestrator {
     await this.db.recordEvent(task.id, "synced_with_base", { pr, ...result });
     await this.db.updateTask(task.id, { context: { syncRequested: undefined, readyAt: undefined, forcePush: !result.upToDate } });
     if (result.conflicts.length) {
-      await this.effects.setReady(worktree, pr, false, []);
+      await this.effects.setReady(worktree, pr, false);
       await this.db.updateTask(task.id, {
         attempts: 0,
         context: {
@@ -653,7 +732,7 @@ export class Orchestrator {
       return this.fail(task, "awaiting_merge", `The gate failed after moving onto the base: ${gate.steps.filter((s) => !s.ok).map((s) => s.name).join(", ")}`, failedSteps(gate, "after the move onto the latest base"));
     }
     await this.effects.commitAndPush(worktree, task.branch!, `Move onto the latest base\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n`, true);
-    await this.effects.setReady(worktree, pr, false, []);
+    await this.effects.setReady(worktree, pr, false);
     await this.db.updateTask(task.id, { context: { forcePush: undefined, lastPushAt: this.now().toISOString() } });
   }
 }
@@ -664,7 +743,7 @@ export function factoryFooter(task: Task): string {
   return [
     "## Software factory",
     "",
-    `The software factory raised this pull request for task \`${task.id}\`${task.ticketKey ? ` (${task.ticketKey})` : ""}. The orchestrator compared lint, type errors and the changed tests with the merge base and found nothing new. It marks the PR ready for review, labelled \`risk:low\` or \`risk:high\`, once CI is green; it never merges.`,
+    `The software factory raised this pull request for task \`${task.id}\`${task.ticketKey ? ` (${task.ticketKey})` : ""}. The orchestrator compared lint, type errors and the changed tests with the merge base and found nothing new. It marks the PR ready for review once CI is green; it never merges.`,
     "",
     `- Risk: ${risk}`,
     ...(Object.keys(task.phaseModels).length ? [`- Model overrides: ${Object.entries(task.phaseModels).map(([p, m]) => `${p} ${m}`).join(", ")}`] : []),

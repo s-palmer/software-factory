@@ -25,7 +25,7 @@ test("start a run, watch it live, then review the results", async ({ page }) => 
   await expect(page.locator('[data-verify-unit="RunTable"]')).toHaveAttribute("data-verify-running", "0");
 });
 
-test("a task shows where it is in the pipeline and can run tests that land in its gallery", async ({ page }) => {
+test("a task shows where it is in the pipeline", async ({ page }) => {
   await page.goto("/");
   // The overview and the task table must agree (other tests change task states, so don't assume counts).
   const table = page.locator('[data-verify-unit="TaskTable"]');
@@ -41,12 +41,6 @@ test("a task shows where it is in the pipeline and can run tests that land in it
   await expect(page.locator(".pipeline__now")).toContainText("Stage 5 of 10: Implement");
   await expect(page.locator('.pipeline__steps li[aria-current="step"]')).toHaveAttribute("data-status", "implementing");
   await page.screenshot(shot("task-progress"));
-
-  const before = Number(await page.locator('[data-verify-unit="ScreenshotGallery"]').getAttribute("data-verify-count"));
-  await page.getByRole("button", { name: "▶ Run browser tests" }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]+$/);
-  await expect(page.locator(".run-page header .run-status")).toHaveText("passed", { timeout: 15_000 });
-  await page.getByRole("link", { name: "this task" }).click();
-  // The fake suite produces one explicit screenshot and one per-test screenshot.
-  await expect(page.locator('[data-verify-unit="ScreenshotGallery"]')).toHaveAttribute("data-verify-count", String(before + 2));
+  // The factory's own test runner is not offered on a task: it runs the factory's suite, not the task's.
+  await expect(page.getByRole("button", { name: /Run browser tests/ })).toHaveCount(0);
 });

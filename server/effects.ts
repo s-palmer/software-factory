@@ -311,6 +311,15 @@ export function createEffects(config: EffectsConfig): Effects {
 
     fileExists: (worktree, path) => existsSync(join(worktree, path)),
 
+    async baseCheckout(worktree) {
+      return prepareBase(await mergeBase(worktree));
+    },
+
+    async untrackedFiles(worktree) {
+      const out = await must(["git", "ls-files", "--others", "--exclude-standard"], worktree);
+      return out.split("\n").map((l) => l.trim()).filter(Boolean);
+    },
+
     async verifyInBrowser({ baseUrl, entry, units, outDir }) {
       // The factory's own Playwright and Chromium (pnpm exec playwright install chromium).
       const { chromium } = await import("@playwright/test");
@@ -498,19 +507,12 @@ export function createEffects(config: EffectsConfig): Effects {
       return parsePrStatus(raw);
     },
 
-    async setReady(worktree, pr, ready, labels) {
+    // The factory adds no labels: it does not create labels in someone else's repository. The risk is in the footer.
+    async setReady(worktree, pr, ready) {
       await must(["gh", "pr", "ready", String(pr), ...(ready ? [] : ["--undo"])], worktree).catch((error: Error) => {
         // Already in the wanted state is fine.
         if (!/already|is not a draft|is a draft/i.test(error.message)) throw error;
       });
-      for (const label of labels) {
-        await run(["gh", "label", "create", label, "--color", label === "risk:high" ? "b60205" : "0e8a16", "--force"], worktree);
-      }
-      // The risk label is exclusive: drop the other one.
-      const drop = labels.includes("risk:high") ? ["risk:low"] : labels.includes("risk:low") ? ["risk:high"] : [];
-      if (labels.length || drop.length) {
-        await must(["gh", "pr", "edit", String(pr), ...labels.flatMap((l) => ["--add-label", l]), ...drop.flatMap((l) => ["--remove-label", l])], worktree);
-      }
     },
 
     env,

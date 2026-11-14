@@ -313,6 +313,18 @@ export class FactoryDb {
     return toArtifact(row!);
   }
 
+  /** Removes an artifact's record and returns it, so the caller can delete its file. Null when there is none. */
+  async deleteArtifact(id: string, by = "human"): Promise<Artifact | null> {
+    const [row] = await this.all("SELECT * REPLACE (strftime(created_at, '%Y-%m-%dT%H:%M:%S') AS created_at) FROM artifacts WHERE id = $1", [id]);
+    if (!row) return null;
+    const artifact = toArtifact(row);
+    await this.tx(async () => {
+      await this.exec("DELETE FROM artifacts WHERE id = $1", [id]);
+      await this.event(artifact.taskId, "artifact_removed", { artifactId: id, path: artifact.path, label: artifact.label, by });
+    });
+    return artifact;
+  }
+
   /** Change a task's per-phase model overrides: `phaseModels` set, `clear` falls back to the factory default. */
   async setModels(taskId: string, change: { phaseModels?: PhaseModels; clear?: Phase[] }, by = "human"): Promise<Task | null> {
     const task = await this.getTask(taskId);

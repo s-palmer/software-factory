@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EnvStatus, Feedback, Learning, Task, TaskDetail, TaskSummary } from "../shared/api";
 import { createApp } from "./app";
@@ -210,6 +213,34 @@ describe("ticket keys", () => {
     const plan = await post("/api/plans", { source: "#3" });
     expect(plan.status).toBe(409);
     expect(await (await app.request("/api/tracker")).json()).toEqual({ type: "mcp", label: "Jira", keyPattern: "^[A-Z]+-\\d+$" });
+  });
+});
+
+describe("artifacts", () => {
+  it("lets a person remove a screenshot, with its file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "factory-artifacts-"));
+    app = createApp(db, { artifactRoot: root });
+    const task = await db.createTask({ title: "x", description: "" });
+    mkdirSync(join(root, "tasks/t/r"), { recursive: true });
+    writeFileSync(join(root, "tasks/t/r/a.png"), "png");
+    const artifact = await db.addArtifact(task.id, { kind: "screenshot", path: "tasks/t/r/a.png", label: "AFTER: PASS: A" });
+    const res = await app.request(`/api/artifacts/${artifact.id}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(root, "tasks/t/r/a.png"))).toBe(false);
+    expect((await db.getTaskDetail(task.id))!.artifacts).toEqual([]);
+    expect((await app.request(`/api/artifacts/${artifact.id}`, { method: "DELETE" })).status).toBe(404);
+  });
+
+  it("never deletes a file outside the artifact root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "factory-artifacts-"));
+    const outside = join(mkdtempSync(join(tmpdir(), "factory-outside-")), "keep.png");
+    writeFileSync(outside, "png");
+    app = createApp(db, { artifactRoot: root });
+    const task = await db.createTask({ title: "x", description: "" });
+    // The API refuses such a path; this checks the delete does not trust the stored one either.
+    const evil = await db.addArtifact(task.id, { kind: "screenshot", path: `../${outside.split("/").slice(-2).join("/")}`, label: "x" });
+    await app.request(`/api/artifacts/${evil.id}`, { method: "DELETE" });
+    expect(existsSync(outside)).toBe(true);
   });
 });
 
