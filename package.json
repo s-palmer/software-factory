@@ -19,6 +19,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm e2e",
     "factory:server": "tsx watch server/index.ts",
     "factory:seed": "tsx server/seed.ts",
+    "docs:screenshots": "tsx server/demo.ts",
     "factory": "tsx cli/bin.ts"
   },
   "dependencies": {

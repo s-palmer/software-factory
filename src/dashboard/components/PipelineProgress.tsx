@@ -52,7 +52,7 @@ export function PipelineProgress({ status, needsBrowser, compact = false }: Pipe
           );
         })}
       </ol>
-      <p className="pipeline__now" data-actor={stage.actor} data-escalated={escalated}>
+      <p className="pipeline__now" data-actor={stage.actor} data-escalated={escalated} data-status={status}>
         <strong>{escalated ? stage.label : `Stage ${step} of ${total}: ${stage.label}`}</strong>. {stage.doing}.{" "}
         {escalated ? "Waiting for a decision." : `Waiting on ${WHO[stage.actor]}.`}
       </p>

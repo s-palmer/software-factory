@@ -9,6 +9,21 @@ ticket -> scoping -> design -> test_writing -> implementing -> reviewing -> brow
                                                                                                (or escalated)
 ```
 
+![The task list: every task, its stage, cost and time](docs/screenshots/tasks.png)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/task-before-after.png" alt="Each acceptance criterion before and after the change, from the browser check"></td>
+<td width="50%"><img src="docs/screenshots/task-sign-off.png" alt="A task waiting at a sign-off gate, with the task list to approve"></td>
+</tr>
+<tr>
+<td>Before and after, per acceptance criterion</td>
+<td>An optional sign-off after design</td>
+</tr>
+</table>
+
+The screenshots show made-up tasks for an imaginary app. `pnpm docs:screenshots` makes them again.
+
 ## What it does
 
 - **One task per ticket.** `factory add --ticket PROJ-12 --after PROJ-11`. A task starts when its blockers are merged.
@@ -101,6 +116,8 @@ factory stop | start | halt --reason "..."
 factory env                               # the local app: up or down, which task runs it, who waits
 factory help
 ```
+
+<img src="docs/screenshots/task-steer.png" alt="The Steer panel: a note for the agents on a running task" width="360" align="right">
 
 The dashboard shows each task's progress, working time, cost, agent runs and decisions, and lets you answer escalations. Its before-and-after panel lists each criterion, the base on the left and the change on the right. Copy puts a picture on the clipboard to paste into a pull request comment; Remove deletes it. The Environment page shows the local app and the task using it.
 

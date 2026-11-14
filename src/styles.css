@@ -121,6 +121,7 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 
 /* ---- Escalation ---- */
 .pipeline__now[data-escalated="true"] strong { color: #a40e26; }
+.pipeline__now[data-status="awaiting_approval"] strong { color: #0550ae; }
 .decision { background: #fff5f5; border-left: 4px solid #cf222e; border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; min-width: 0; }
 .decision h3 { margin: 0 0 6px; font-size: 15px; }
 .decision__reason { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -254,7 +255,8 @@ a.button:hover { background: #094a8c; }
 
 
 /* ---- Steering ---- */
-.steer { margin-bottom: 16px; }
+.steer { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 2px rgb(0 0 0 / 0.1); margin-bottom: 16px; }
+.steer h2 { margin-top: 0; font-size: 16px; }
 .steer__notes { margin: 0 0 8px; padding-left: 20px; }
 .steer__by { color: #777; font-size: 12px; }
 .steer__paused { margin: 0 0 8px; color: #9a6700; font-weight: 600; }
