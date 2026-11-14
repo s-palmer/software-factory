@@ -62,8 +62,11 @@ export type PrStatus = {
   changesRequested: Array<{ at: string; by: string; body: string }>;
 };
 
+/** Thrown when a person stops a run, so the step ends without an escalation. */
+class RunStopped extends Error {}
+
 export interface Effects {
-  claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string> }): Promise<ClaudeResult>;
+  claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string>; signal?: AbortSignal }): Promise<ClaudeResult>;
   createWorktree(task: Task): Promise<{ branch: string; worktree: string }>;
   /**
    * Runs `fn` on a clean checkout of the merge base, with dependencies installed. The checkout is shared, so it is
@@ -171,6 +174,17 @@ export class Orchestrator {
   }
 
   /** The ready task in a factory stage that waited longest, so tasks interleave. */
+  /** Stops the agent run in progress on a task. The task stays in its stage and runs it again on its next step. */
+  interrupt(taskId: string): boolean {
+    const run = this.liveRuns.get(taskId);
+    if (!run) return false;
+    run.abort();
+    return true;
+  }
+
+  /** The agent run in progress per task, so a person can stop it. */
+  private readonly liveRuns = new Map<string, AbortController>();
+
   async nextTask(): Promise<string | null> {
     const queue = await this.db.taskQueue([...FACTORY_STAGES]);
     return queue.find((id) => !this.busy.has(id)) ?? null;
@@ -208,12 +222,14 @@ export class Orchestrator {
     this.busy.add(taskId);
     try {
       const task = await this.db.getTask(taskId);
-      if (!task || !FACTORY_STAGES.has(task.status)) return;
+      if (!task || !FACTORY_STAGES.has(task.status) || task.context.paused) return;
       if (task.status === "backlog") return await this.setUp(task);
       if (task.status === "browser_check") return await this.browserCheck(task);
       if (task.status === "awaiting_merge") return await this.watchPr(task);
       if (AGENT_STAGES.has(task.status)) return await this.agentStage(task, task.status as AgentStage);
     } catch (error) {
+      // A person stopped the run: the task stays where it is and runs the stage again, with their note.
+      if (error instanceof RunStopped) return;
       const task = await this.db.getTask(taskId);
       if (task) await this.escalate(task, `The factory failed: ${(error as Error).message}`);
     } finally {
@@ -366,15 +382,29 @@ export class Orchestrator {
       tracker: this.config.tracker,
       verify: this.config.verify,
       trustedAuthors: this.config.trustedAuthors,
+      steering: (context.steering ?? []).map((s) => s.note),
       isolation: this.config.isolation && task.worktree ? runIsolation(this.config.isolation, worktreeRoot(this.config.isolation.home, task.id)) : undefined,
       settings,
     };
     let result: ClaudeResult;
+    // A retro runs beside the task's own steps, so only stage runs can be stopped.
+    const controller = stage === "retro" ? null : new AbortController();
+    if (controller) this.liveRuns.set(task.id, controller);
     try {
-      result = await this.effects.claude(opts.build ? opts.build(ctx) : phaseCall(stage as AgentStage, task, ctx), { cwd: task.worktree ?? ".", runDir });
+      result = await this.effects.claude(opts.build ? opts.build(ctx) : phaseCall(stage as AgentStage, task, ctx), {
+        cwd: task.worktree ?? ".",
+        runDir,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
     } catch (error) {
       await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
       throw error;
+    } finally {
+      if (controller && this.liveRuns.get(task.id) === controller) this.liveRuns.delete(task.id);
+    }
+    if (controller?.signal.aborted) {
+      await this.db.finishAgentRun(run.id, { status: "error", costUsd: result.costUsd, summary: "Stopped by a person; the stage runs again", logPath: result.logPath });
+      throw new RunStopped();
     }
     await this.db.finishAgentRun(run.id, {
       status: result.ok ? "passed" : "failed",

@@ -223,6 +223,22 @@ describe("factory CLI", () => {
     expect((await json<Array<{ message: string }>>(["notifications"])).data[0]!.message).toMatch(/Factory halted by agent:conductor/);
   });
 
+  it("adds a task with its own sign-off gates", async () => {
+    const add = await json<Task>(["add", "--ticket", "#9", "--gate", "scoping", "--gate", "design"]);
+    expect(add.data.context.gates).toEqual(["scoping", "design"]);
+    expect((await cli(["add", "--ticket", "#10", "--gate", "pr"])).code).toBe(EXIT.invalid);
+  });
+
+  it("steers, pauses and unpauses a task", async () => {
+    const task = await db.createTask({ title: "x", description: "" }, "implementing");
+    const steer = await json<{ task: Task; restarted: boolean }>(["steer", task.id, "--message", "Use the card", "--restart"]);
+    expect(steer.code).toBe(EXIT.ok);
+    expect(steer.data).toMatchObject({ restarted: false, task: { context: { steering: [{ note: "Use the card", by: "human" }] } } });
+    expect((await cli(["steer", task.id])).code).toBe(EXIT.invalid);
+    expect((await json<Task>(["pause", task.id])).data.context.paused).toBe(true);
+    expect((await json<Task>(["unpause", task.id])).data.context.paused).toBeUndefined();
+  });
+
   it("notifies a person about a task", async () => {
     const task = await db.createTask({ title: "x", description: "" });
     expect((await cli(["notify", "--task", task.id, "--message", "Touches payments: please decide"], { FACTORY_ACTOR: "agent:conductor" })).code).toBe(EXIT.ok);

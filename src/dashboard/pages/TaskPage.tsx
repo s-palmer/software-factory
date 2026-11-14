@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FeedbackInput, TaskDetail, TaskSummary } from "../../../shared/api";
+import type { FeedbackInput, SteerInput, TaskDetail, TaskSummary } from "../../../shared/api";
 import { DEFAULT_PHASE_MODELS, PHASES, type PhaseModels } from "../../../shared/models";
 import { api } from "../api";
 import { AgentRunList } from "../components/AgentRunList";
 import { FeedbackPanel } from "../components/FeedbackPanel";
+import { SteerPanel } from "../components/SteerPanel";
 import { ModelPicker, type ModelChange } from "../components/ModelPicker";
 import { PipelineProgress } from "../components/PipelineProgress";
 import { isEvidence } from "../../../shared/evidence";
@@ -42,6 +43,7 @@ export function TaskPage({ id }: { id: string }) {
   const [defaults, setDefaults] = useState<PhaseModels>(DEFAULT_PHASE_MODELS);
   const [stepping, setStepping] = useState(false);
   const [stepNote, setStepNote] = useState<string | null>(null);
+  const [steerError, setSteerError] = useState<string | null>(null);
   const [loadedDoc, setLoadedDoc] = useState<{ key: string; doc: { path: string; text: string | null } } | null>(null);
 
   const load = useCallback(() => {
@@ -93,6 +95,28 @@ export function TaskPage({ id }: { id: string }) {
       setStepNote(`Couldn't start the next step: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setStepping(false);
+    }
+  }
+
+  async function steer(input: SteerInput) {
+    setSteerError(null);
+    try {
+      await api.steer(id, input);
+      load();
+    } catch (err) {
+      setSteerError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
+
+  async function setPaused(paused: boolean) {
+    setSteerError(null);
+    try {
+      await api.setPaused(id, paused);
+      load();
+    } catch (err) {
+      setSteerError(err instanceof Error ? err.message : String(err));
+      throw err;
     }
   }
 
@@ -175,6 +199,7 @@ export function TaskPage({ id }: { id: string }) {
         </div>
         <aside>
           <FeedbackPanel status={task.status} context={task.context} gateDoc={gateDoc} artifacts={artifacts} selectedArtifactId={selected} onSubmit={sendFeedback} error={feedbackError} />
+          <SteerPanel status={task.status} steering={task.context.steering} paused={task.context.paused} onSteer={steer} onPause={setPaused} error={steerError} />
           <section className="models-panel">
             <ModelPicker defaults={defaults} overrides={overrides} onChange={changeModel} disabled={pendingOverrides !== null || task.status === "done"} idPrefix="task-model" />
             {modelsError && <p role="alert" className="error">{modelsError}</p>}

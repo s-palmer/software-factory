@@ -41,6 +41,13 @@ export interface DefaultModels {
   phaseModels: Record<Phase, string>;
 }
 
+/** A note for the agents on a running task. `restart` stops the run in progress, and the stage runs again with the note. */
+export const SteerInput = z.object({
+  note: z.string().trim().min(1, "A note is required").max(4000),
+  restart: z.boolean().default(false),
+});
+export type SteerInput = z.infer<typeof SteerInput>;
+
 export const FeedbackInput = z
   .object({
     decision: z.enum(["approve", "request_changes", "comment"]),
@@ -116,6 +123,10 @@ export interface TaskContext {
   gates?: Gate[];
   /** At a gate: the stage the task stopped after. */
   gateStage?: Gate;
+  /** Notes from people (or the conductor) for every later agent run on this task, oldest first. */
+  steering?: Array<{ note: string; by: string; at: string }>;
+  /** A paused task takes no new steps; a run in progress finishes. */
+  paused?: boolean;
   /** UI units checked on the harness page in the browser check. */
   verified?: { units: string[]; passed: number; total: number };
   /** The GitHub issue, read by the factory when the task starts. Trackers behind MCP are read by the agents. */

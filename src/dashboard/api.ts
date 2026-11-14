@@ -1,4 +1,4 @@
-import type { Artifact, CreateTaskInput, Learning, UpdateLearningInput, DefaultModels, EnvStatus, TrackerInfo, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
+import type { Artifact, CreateTaskInput, Learning, UpdateLearningInput, DefaultModels, EnvStatus, TrackerInfo, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, SteerInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
 import type { RiskPolicy } from "../../shared/risk";
 
 /** The orchestrator loop. `available: false` when the server runs without one (e.g. tests). */
@@ -30,6 +30,9 @@ export const api = {
   /** The solution doc and the task list, from the task's worktree. `text` is null when the file is not there. */
   getDocs: (id: string) =>
     request<{ solution: { path: string; text: string | null }; tasks: { path: string; text: string | null } }>(`/api/tasks/${encodeURIComponent(id)}/docs`),
+  steer: (id: string, input: SteerInput) =>
+    request<{ task: Task; restarted: boolean }>(`/api/tasks/${encodeURIComponent(id)}/steer`, { method: "POST", body: JSON.stringify(input) }),
+  setPaused: (id: string, paused: boolean) => request<Task>(`/api/tasks/${encodeURIComponent(id)}/${paused ? "pause" : "unpause"}`, { method: "POST" }),
   sendFeedback: (id: string, input: FeedbackInput) =>
     request<{ task: Task; feedback: Feedback }>(`/api/tasks/${encodeURIComponent(id)}/feedback`, {
       method: "POST",

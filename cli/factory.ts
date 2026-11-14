@@ -46,6 +46,7 @@ function exitFor(status: number): number {
 type Flags = {
   json: boolean;
   waiting: boolean;
+  restart: boolean;
   help: boolean;
   url?: string;
   actor?: string;
@@ -206,6 +207,33 @@ export const COMMANDS: Record<string, Command> = {
   },
   approve: { usage: "approve <task> [--comment <text>]", summary: "Retry the stage an escalated task stopped in, or approve a task at a gate", args: 1, run: decision("approve", false) },
   changes: { usage: "changes <task> --comment <text>", summary: "Send an escalated task, or a task at a gate, back with changes (comment required)", args: 1, run: decision("request_changes", true) },
+  steer: {
+    usage: "steer <task> --message <text> [--restart]",
+    summary: "A note every later agent run on the task reads; --restart stops the run in progress and redoes the stage with it",
+    args: 1,
+    run: async ({ api, args, flags }) => {
+      const res = await api<{ task: Task; restarted: boolean }>("POST", `/api/tasks/${enc(args[0]!)}/steer`, { note: need(flags.message, "message"), restart: flags.restart });
+      return { data: res, text: `noted${res.restarted ? ", run stopped, the stage runs again" : flags.restart ? " (no run was in progress)" : ""}: ${taskLine(res.task)}` };
+    },
+  },
+  pause: {
+    usage: "pause <task>",
+    summary: "Take no new steps on the task; a run in progress finishes",
+    args: 1,
+    run: async ({ api, args }) => {
+      const task = await api<Task>("POST", `/api/tasks/${enc(args[0]!)}/pause`);
+      return { data: task, text: `paused: ${taskLine(task)}` };
+    },
+  },
+  unpause: {
+    usage: "unpause <task>",
+    summary: "Let a paused task go on",
+    args: 1,
+    run: async ({ api, args }) => {
+      const task = await api<Task>("POST", `/api/tasks/${enc(args[0]!)}/unpause`);
+      return { data: task, text: `unpaused: ${taskLine(task)}` };
+    },
+  },
   comment: { usage: "comment <task> --comment <text>", summary: "Add a comment without moving the task", args: 1, run: decision("comment", true) },
   models: {
     usage: "models <task> [--phase <phase>=<model>]... [--clear <phase>]...",
@@ -542,6 +570,7 @@ function parse(argv: string[]): { positionals: string[]; flags: Flags } {
       options: {
         json: { type: "boolean", default: false },
         waiting: { type: "boolean", default: false },
+        restart: { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
         url: { type: "string" },
         actor: { type: "string" },

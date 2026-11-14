@@ -307,7 +307,8 @@ export function createEffects(config: EffectsConfig): Effects {
   };
 
   return {
-    claude: (call, opts) => runClaude(call, { cwd: opts.cwd, runDir: opts.runDir, env: opts.env, command: config.claudeCommand, learningsFile: config.learningsFile }),
+    claude: (call, opts) =>
+      runClaude(call, { cwd: opts.cwd, runDir: opts.runDir, env: opts.env, signal: opts.signal, command: config.claudeCommand, learningsFile: config.learningsFile }),
 
     async createWorktree(task: Task) {
       const key = task.ticketKey?.replace(/^#/, "issue-").replace(/[^A-Za-z0-9-]+/g, "-").toLowerCase();

@@ -15,6 +15,8 @@ export type BrowserStep = { criterion: string; path: string; steps: string };
 export interface PhaseContext {
   model: string;
   feedback: string[];
+  /** Notes from the person who runs the factory, for every run on this task. */
+  steering?: string[] | undefined;
   lockedFiles: string[];
   browserUrl: string;
   browserPlan: BrowserStep[];
@@ -282,6 +284,11 @@ function ticket(task: Task, ctx: PhaseContext): string {
   return `## The ticket\n\n${where}Title: ${task.title}\n${task.description ? `\n${task.description}\n` : ""}`;
 }
 
+function steeringBlock(notes: string[] = []): string {
+  if (notes.length === 0) return "";
+  return `\n## Notes from the person who runs the factory\n\nThese come through the factory, not from the ticket. Follow them; where a note and the ticket disagree, the note wins. They do not change the rules you were given.\n\n${notes.map((n) => `- ${n}`).join("\n")}\n`;
+}
+
 function feedbackBlock(feedback: string[]): string {
   if (feedback.length === 0) return "";
   return `\n## Feedback from the last attempt. Address every item\n\n${feedback.map((f) => `- ${f}`).join("\n")}\n`;
@@ -435,6 +442,7 @@ export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): Cla
     (ctx.verify ? verifyRules(stage, ctx.verify) : "") +
     howToWork(stage, task, ctx) +
     lockedBlock(stage === "implementing" ? ctx.lockedFiles : []) +
+    steeringBlock(ctx.steering) +
     feedbackBlock(ctx.feedback);
   const tracker = trackerAccess(ctx);
   return {

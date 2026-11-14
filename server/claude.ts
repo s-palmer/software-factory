@@ -110,6 +110,8 @@ export type RunOptions = {
   env?: Record<string, string> | undefined;
   /** The approved learnings for this repository. Default: the factory's own prompts/learnings.md. */
   learningsFile?: string | undefined;
+  /** Stops the run: the process gets SIGTERM and the result is `stopped`. */
+  signal?: AbortSignal | undefined;
 };
 
 export function runClaude(call: ClaudeCall, options: RunOptions): Promise<ClaudeResult> {
@@ -149,6 +151,12 @@ export function runClaude(call: ClaudeCall, options: RunOptions): Promise<Claude
     const child = spawn(bin, args, { cwd: options.cwd, env: { ...parentEnv, ...options.env }, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.pipe(log);
     child.stderr.pipe(errLog);
+    const stop = (): void => {
+      child.kill("SIGTERM");
+      settle({ ok: false, subtype: "stopped", costUsd: 0, turns: 0, sessionId: null, output: null, text: "Stopped by a person", logPath });
+    };
+    if (options.signal?.aborted) stop();
+    else options.signal?.addEventListener("abort", stop, { once: true });
 
     // A failed spawn can emit "close" before "error", so both paths settle once and read the logs only if they exist.
     child.on("error", (error) => crash(`could not start ${bin}: ${error.message}`));

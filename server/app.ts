@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Hono } from "hono";
-import { ArtifactInput, CreateTaskInput, UpdateLearningInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, type RunDetail } from "../shared/api";
+import { ArtifactInput, CreateTaskInput, UpdateLearningInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, SteerInput, type RunDetail } from "../shared/api";
 import { ACTOR_HEADER, ActorSchema, isAgent, type Actor } from "../shared/actor";
 import type { RiskPolicy } from "../shared/risk";
 import { afterDecision, statusLabel } from "../shared/lifecycle";
@@ -218,6 +218,36 @@ export function createApp(
     void orchestrator.step(task.id);
     return c.json({ ok: true, status: task.status }, 202);
   });
+
+  /**
+   * Steering a running task: a note every later agent run reads, and with `restart` the run in progress stops and
+   * the stage runs again with the note. Pause and resume: a paused task takes no new steps.
+   */
+  app.post("/api/tasks/:id/steer", async (c) => {
+    const task = await db.getTask(c.req.param("id"));
+    if (!task) return c.json({ error: "Task not found" }, 404);
+    if (task.status === "done") return c.json({ error: "The task is done; there is nothing to steer" }, 409);
+    const parsed = SteerInput.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.issues.map((i) => i.message).join("; ") }, 400);
+    const by = c.get("actor");
+    const steering = [...(task.context.steering ?? []), { note: parsed.data.note, by, at: new Date().toISOString() }];
+    await db.updateTask(task.id, { context: { steering } });
+    const restarted = parsed.data.restart ? (orchestrator?.interrupt(task.id) ?? false) : false;
+    await db.recordEvent(task.id, "steered", { note: parsed.data.note, restart: parsed.data.restart, restarted, by });
+    return c.json({ task: await db.getTask(task.id), restarted }, 201);
+  });
+
+  for (const [path, paused] of [["pause", true], ["unpause", false]] as const) {
+    app.post(`/api/tasks/:id/${path}`, async (c) => {
+      const task = await db.getTask(c.req.param("id"));
+      if (!task) return c.json({ error: "Task not found" }, 404);
+      if (Boolean(task.context.paused) !== paused) {
+        await db.updateTask(task.id, { context: { paused: paused || undefined } });
+        await db.recordEvent(task.id, paused ? "paused" : "unpaused", { by: c.get("actor") });
+      }
+      return c.json(await db.getTask(task.id));
+    });
+  }
 
   /** What always needs a human, so the dashboard can explain the autonomy modes. */
   app.get("/api/policy", (c) => (policy ? c.json(policy) : c.json({ error: "No policy loaded" }, 404)));

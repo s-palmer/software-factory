@@ -252,3 +252,10 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 a.button { display: inline-block; padding: 4px 12px; border: 1px solid #0b5cad; border-radius: 6px; background: #0b5cad; color: #fff; text-decoration: none; font-size: 14px; }
 a.button:hover { background: #094a8c; }
 
+
+/* ---- Steering ---- */
+.steer { margin-bottom: 16px; }
+.steer__notes { margin: 0 0 8px; padding-left: 20px; }
+.steer__by { color: #777; font-size: 12px; }
+.steer__paused { margin: 0 0 8px; color: #9a6700; font-weight: 600; }
+.steer__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

@@ -431,7 +431,8 @@ export class FactoryDb {
     const placeholders = statuses.map((_, i) => `$${i + 1}`).join(", ");
     // Only ready tasks: every blocker is done (merged). A blocker that escalated keeps its dependents waiting.
     const rows = await this.all(
-      `SELECT id FROM tasks t WHERE status IN (${placeholders}) AND NOT EXISTS (
+      `SELECT id FROM tasks t WHERE status IN (${placeholders})
+       AND json_extract_string(context, '$.paused') IS DISTINCT FROM 'true' AND NOT EXISTS (
          SELECT 1 FROM task_deps d JOIN tasks b ON b.id = d.blocked_by WHERE d.task_id = t.id AND b.status <> 'done')
        ORDER BY updated_at, created_at, id`,
       [...statuses],

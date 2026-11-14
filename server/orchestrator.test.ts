@@ -45,7 +45,7 @@ class Fakes implements Effects {
     return this;
   }
 
-  async claude(call: ClaudeCall, opts: { runDir: string; cwd: string }): Promise<ClaudeResult> {
+  async claude(call: ClaudeCall, opts: { runDir: string; cwd: string; signal?: AbortSignal }): Promise<ClaudeResult> {
     const phase = /^# Phase: (.+)$/m.exec(call.prompt)?.[1] as Phase;
     this.calls.push({ phase, model: call.model, prompt: call.prompt, call });
     const out = (this.scripts.get(phase)?.shift() ?? DEFAULTS[phase])!;
@@ -480,6 +480,48 @@ describe("the decider", () => {
     expect((await get(task.id)).status).toBe("scoping");
     await orch.step(task.id);
     expect(fakes.calls.filter((c) => c.phase === "scoping").at(-1)!.prompt).toContain("A person asked for changes: Keep the old URL");
+  });
+
+  it("a person's note reaches every later run; a stopped run redoes the stage with no escalation", async () => {
+    const claude = fakes.claude.bind(fakes);
+    let stopped = false;
+    fakes.claude = async (call, opts) => {
+      if (call.prompt.startsWith("# Phase: design") && !stopped) {
+        await new Promise<void>((resolve) => opts.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        stopped = true;
+        return { ok: false, subtype: "stopped", costUsd: 0.01, turns: 1, sessionId: null, output: null, text: "Stopped", logPath: join(opts.runDir, "stream.jsonl") };
+      }
+      return claude(call, opts);
+    };
+    const task = await newTask();
+    await orch.step(task.id); // set up
+    await orch.step(task.id); // scoping
+    expect((await get(task.id)).status).toBe("design");
+
+    const running = orch.step(task.id);
+    while (!orch.interrupt(task.id)) await new Promise((r) => setTimeout(r, 5));
+    await running;
+    const after = await get(task.id);
+    expect(after).toMatchObject({ status: "design", attempts: 0 });
+    expect(after.context.escalation).toBeUndefined();
+    expect((await db.listAgentRuns(task.id))[0]).toMatchObject({ stage: "design", status: "error", summary: expect.stringContaining("Stopped by a person") });
+
+    await db.updateTask(task.id, { context: { steering: [{ note: "Keep the old URL", by: "human", at: "2026-11-14T12:00:00Z" }] } });
+    expect((await drive(task.id)).at(-1)).toBe("done");
+    const later = fakes.calls.filter((c) => ["design", "implement", "review"].includes(c.phase));
+    expect(later.length).toBeGreaterThan(2);
+    for (const c of later.slice(1)) expect(c.prompt).toContain("- Keep the old URL");
+  });
+
+  it("takes no steps on a paused task, and other tasks go on", async () => {
+    const paused = await newTask({ title: "Paused" });
+    await db.updateTask(paused.id, { context: { paused: true } });
+    const other = await newTask({ title: "Other" });
+    expect(await orch.nextTask()).toBe(other.id);
+    await orch.step(paused.id);
+    expect((await get(paused.id)).status).toBe("backlog");
+    await db.updateTask(paused.id, { context: { paused: undefined } });
+    expect(await db.taskQueue(["backlog"])).toContain(paused.id);
   });
 
   it("answers scoping questions, and design gets the answers", async () => {

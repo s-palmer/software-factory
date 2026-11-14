@@ -71,6 +71,35 @@ describe("tasks", () => {
   });
 });
 
+describe("steering", () => {
+  const steer = (id: string, body: unknown, actor = "human") =>
+    app.request(`/api/tasks/${id}/steer`, { method: "POST", headers: { "content-type": "application/json", "x-factory-actor": actor }, body: JSON.stringify(body) });
+
+  it("adds notes in order, with who wrote them, and records an event", async () => {
+    const task = await db.createTask({ title: "Ship it", description: "" }, "implementing");
+    expect((await steer(task.id, { note: "  Use the card component  " })).status).toBe(201);
+    expect((await steer(task.id, { note: "Skip the legacy page" }, "agent:conductor")).status).toBe(201);
+    const detail = (await (await app.request(`/api/tasks/${task.id}`)).json()) as TaskDetail;
+    expect(detail.task.context.steering?.map((s) => [s.note, s.by])).toEqual([["Use the card component", "human"], ["Skip the legacy page", "agent:conductor"]]);
+    expect(detail.events.at(-1)).toMatchObject({ type: "steered", payload: { note: "Skip the legacy page", restart: false, by: "agent:conductor" } });
+  });
+
+  it("refuses an empty note and a done task", async () => {
+    const task = await db.createTask({ title: "Ship it", description: "" }, "implementing");
+    expect((await steer(task.id, { note: "  " })).status).toBe(400);
+    const done = await db.createTask({ title: "Old", description: "" }, "done");
+    expect((await steer(done.id, { note: "x" })).status).toBe(409);
+  });
+
+  it("pauses and unpauses a task", async () => {
+    const task = await db.createTask({ title: "Ship it", description: "" }, "implementing");
+    const paused = (await (await post(`/api/tasks/${task.id}/pause`, {})).json()) as Task;
+    expect(paused.context.paused).toBe(true);
+    const again = (await (await post(`/api/tasks/${task.id}/unpause`, {})).json()) as Task;
+    expect(again.context.paused).toBeUndefined();
+  });
+});
+
 describe("gates", () => {
   const gated = async () => {
     const task = await db.createTask({ title: "Ship it", description: "" }, "awaiting_approval");

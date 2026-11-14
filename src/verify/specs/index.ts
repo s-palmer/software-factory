@@ -16,3 +16,4 @@ import "./WaitingFor.verify";
 import "./EnvPanel.verify";
 import "./BeforeAfter.verify";
 import "./LearningList.verify";
+import "./SteerPanel.verify";

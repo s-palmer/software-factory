@@ -100,7 +100,9 @@ Each event is `{ id, ts, taskId, ticketKey, status, type, payload }`, where `sta
 | `pr_ready` | `pr`, `headSha`, `risk` | CI is green and the pull request is ready to merge |
 | `synced_with_base` | `pr`, `upToDate`, `conflicts` | The change was moved onto the latest base |
 | `pr_merged` | `pr`, `headSha` | The factory saw the merge; the task is done |
-| `human_feedback` | `decision`, `by`, `escalation` | A decision on an escalated task |
+| `human_feedback` | `decision`, `by`, `escalation` | A decision on an escalated task, or at a gate |
+| `steered` | `note`, `restart`, `restarted`, `by` | A note for the task's agents; `restarted` is true when a run was stopped |
+| `paused`, `unpaused` | `by` | The task takes no new steps, or goes on |
 | `notification` | `message`, `by` | A message for a person |
 
 ### Reading tasks
@@ -146,6 +148,17 @@ factory notify --task <task> --message "touches payments: a person must decide"
 ```
 
 The API limits agents (exit 5) to one retry per escalation reason and two change requests per task. After that, a person decides. People have no limits.
+
+### Steering a running task
+
+```sh
+factory steer <task> --message "use the existing card component" --json   # every later run reads it
+factory steer <task> --message "wrong file: edit src/list.tsx" --restart  # stop the run in progress; the stage runs again
+factory pause <task> --json      # no new steps; a run in progress finishes
+factory unpause <task> --json
+```
+
+Notes are in `context.steering`, with who wrote them. Agents read them under "Notes from the person who runs the factory", and a note wins over the ticket where they disagree. A stopped run does not count as a failed attempt. A paused task has `context.paused`. Agents may steer and pause; the event records who did.
 
 ### Gates
 
@@ -195,6 +208,8 @@ The CLI is a thin wrapper, so agents may call the API directly, under the same r
 | PUT | `/api/tasks/:id/models` | `models` |
 | POST | `/api/tasks/:id/sync` | `sync` |
 | POST | `/api/tasks/:id/step` | `step` |
+| POST | `/api/tasks/:id/steer` | `steer` |
+| POST | `/api/tasks/:id/pause`, `/api/tasks/:id/unpause` | `pause`, `unpause` |
 | GET | `/api/events` | `events` |
 | GET, PUT | `/api/models` | `defaults` |
 | GET, PUT | `/api/orchestrator` | `start`, `stop` |

@@ -17,6 +17,7 @@ ticket -> scoping -> design -> test_writing -> implementing -> reviewing -> brow
 - **Several tasks at once** (`maxParallelTasks`, default 3). Each has its own worktree; the local app, the merge-base checkout and writes to the shared repository are taken in turn.
 - **Failures loop back** to `implementing` with the failure as feedback. Three failures in a row escalate.
 - **Autonomous by default, sign-off per task.** A task can stop for a person's approval after scoping (the solution doc), after design (the task list), or both: the Sign-off choice in the New task form, or `factory add --gate design`. Approve goes on; Request changes runs that stage again with your comment. `gates` in the config sets a default for tasks that do not choose.
+- **Steering.** Give a running task a note (the Steer panel, or `factory steer`). Every later agent run on the task reads it. "Stop and redo the stage" stops the run in progress and runs the stage again with the note, with no escalation. Pause stops a task taking new steps.
 - **No questions to people.** A decider agent answers the agents' questions, and escalates only for money, legal text, security or stored data.
 - **A browser check** for visible changes. An agent checks each acceptance criterion in your running app and takes a screenshot. The factory then photographs the same criteria on the base branch, so the dashboard shows each criterion before and after. Screenshots stay with the task and never go into the repository.
 - **Isolated agents.** Each agent works in its own git worktree. File tools cannot leave it, and shell commands (including the tests they run) run in Claude Code's sandbox: no reads of the rest of your home folder, and no network unless you allow a host.
@@ -94,6 +95,8 @@ factory status | list | show <task> | events --since 0
 factory add --ticket PROJ-12 --gate scoping   # stop for your sign-off after scoping
 factory approve <task>                    # retry an escalated task, or approve one at a gate
 factory changes <task> --comment "..."    # send it back with feedback
+factory steer <task> --message "..." [--restart]   # a note for every later run; --restart redoes the stage now
+factory pause <task> | unpause <task>
 factory stop | start | halt --reason "..."
 factory env                               # the local app: up or down, which task runs it, who waits
 factory help
