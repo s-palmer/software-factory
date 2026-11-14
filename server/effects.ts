@@ -12,7 +12,7 @@ import { join, relative, resolve } from "node:path";
 import type { Task } from "../shared/api";
 import type { FileChange } from "../shared/risk";
 import { runClaude } from "./claude";
-import type { EnvController, Effects, GateResult, GateStep, PrStatus } from "./orchestrator";
+import type { EnvController, Effects, GateResult, GateStep, PrStatus, VerifyRun } from "./orchestrator";
 import { LOCKFILES } from "../shared/config";
 
 export interface EffectsConfig {
@@ -288,6 +288,42 @@ export function createEffects(config: EffectsConfig): Effects {
     },
 
     fileExists: (worktree, path) => existsSync(join(worktree, path)),
+
+    async verifyInBrowser({ baseUrl, entry, units, outDir }) {
+      // The factory's own Playwright and Chromium (pnpm exec playwright install chromium).
+      const { chromium } = await import("@playwright/test");
+      const browser = await chromium.launch({ headless: true });
+      type Handle = { manifest(): Array<{ unitId: string; fixtures: Array<{ id: string; route: string }> }>; current(): { verdict: VerifyRun["verdict"]; checks: Array<{ status: string; label: string; detail?: string }>; blockedReason?: string } | null };
+      try {
+        const page = await browser.newPage();
+        await page.goto(new URL(entry, baseUrl).toString());
+        await page.waitForFunction(() => Boolean((globalThis as unknown as { __verify?: unknown }).__verify), null, { timeout: 30_000 });
+        const manifest = await page.evaluate(() => (globalThis as unknown as { __verify: Handle }).__verify.manifest());
+        const results: VerifyRun[] = [];
+        for (const unit of manifest.filter((m) => units.includes(m.unitId))) {
+          for (const fixture of unit.fixtures) {
+            const route = `${fixture.route}${fixture.route.includes("?") ? "&" : "?"}chrome=0`;
+            await page.goto(new URL(route, baseUrl).toString());
+            const done = await page.waitForSelector("body[data-verify-verdict]", { timeout: 15_000 }).then(() => true, () => false);
+            const current = done ? await page.evaluate(() => (globalThis as unknown as { __verify: Handle }).__verify.current()) : null;
+            const screenshot = `${unit.unitId}--${fixture.id}.png`.replace(/[^\w.-]+/g, "-");
+            await page.screenshot({ path: join(outDir, screenshot), fullPage: true });
+            results.push({
+              unit: unit.unitId,
+              fixture: fixture.id,
+              verdict: current?.verdict ?? "BLOCKED",
+              failures: current
+                ? [...(current.blockedReason ? [current.blockedReason] : []), ...current.checks.filter((c) => c.status === "fail").map((c) => `${c.label}${c.detail ? `: ${c.detail}` : ""}`)]
+                : ["the fixture page never reported a verdict"],
+              screenshot,
+            });
+          }
+        }
+        return { results, missing: units.filter((u) => !manifest.some((m) => m.unitId === u)) };
+      } finally {
+        await browser.close();
+      }
+    },
 
     async fetchIssue(cwd, key) {
       const number = key.replace(/^#/, "");

@@ -14,7 +14,7 @@ import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
 import type { FactoryDb } from "./db";
 import { runIsolation, type IsolationConfig } from "./isolation";
-import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules } from "./phases";
+import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules, type VerifyContext } from "./phases";
 
 export interface GateStep {
   name: string;
@@ -37,6 +37,15 @@ export interface EnvController {
   logTail(logPath: string): string;
   /** Processes listening on the health URLs' ports. */
   portHolders?(): Promise<Array<{ port: number; pid: number; command: string }>>;
+}
+
+/** One fixture checked in the browser. `screenshot` is a file name in the run's output folder. */
+export type VerifyRun = { unit: string; fixture: string; verdict: "PASS" | "FAIL" | "BLOCKED" | "SKIP"; failures: string[]; screenshot: string | null };
+
+/** The unit ids of the verify specs among `files` (a spec is `<dir>/specs/<Unit>.verify.ts`). */
+export function verifyUnits(files: string[], dir: string): string[] {
+  const re = new RegExp(`^${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/specs/([^/]+)\\.verify\\.tsx?$`);
+  return [...new Set(files.flatMap((f) => re.exec(f)?.[1] ?? []))];
 }
 
 /** What the factory reads from an open pull request. */
@@ -64,6 +73,11 @@ export interface Effects {
   gate(worktree: string, changes: FileChange[]): Promise<GateResult>;
   /** Type check new test files, allowing "not yet implemented" errors. */
   typecheckTests(worktree: string, files: string[]): Promise<GateResult>;
+  /**
+   * Open each fixture of these units on the harness page of the running app, read the verdict and save a
+   * screenshot to `outDir`. `missing`: units the harness does not list.
+   */
+  verifyInBrowser(opts: { baseUrl: string; entry: string; units: string[]; outDir: string }): Promise<{ results: VerifyRun[]; missing: string[] }>;
   runTests(worktree: string, files: string[]): Promise<{ ok: boolean; output: string }>;
   /** `force`: the branch was moved onto the base, so it replaces the remote with --force-with-lease. */
   commitAndPush(worktree: string, branch: string, message: string, force?: boolean): Promise<void>;
@@ -96,6 +110,8 @@ export interface OrchestratorConfig {
   tracker?: PhaseTracker | undefined;
   /** Without it, runs are not sandboxed (tests with fakes). */
   isolation?: IsolationConfig | undefined;
+  /** Runtime verification of UI units, when the project has it. */
+  verify?: VerifyContext | undefined;
   /** The branch PRs target, named in the review and PR prompts (default "main"). */
   baseBranch?: string;
   tickMs: number;
@@ -258,6 +274,7 @@ export class Orchestrator {
       tools: this.config.tools,
       skillsDir: this.config.skillsDir,
       tracker: this.config.tracker,
+      verify: this.config.verify,
       isolation: this.config.isolation && task.worktree ? runIsolation(this.config.isolation, worktreeRoot(this.config.isolation.home, task.id)) : undefined,
       settings,
     };
@@ -385,7 +402,10 @@ export class Orchestrator {
       return this.move(task, "implementing");
     }
     const run = await this.db.startAgentRun(task.id, "test_writing", "red-check");
-    const tests = await this.effects.runTests(worktree, files);
+    // A verify spec is not a test file: the matrix test runs every registered spec.
+    const verify = this.config.verify;
+    const runnable = verify ? [...new Set(files.map((f) => (verifyUnits([f], verify.dir).length || f === `${verify.dir}/specs/index.ts` ? `${verify.dir}/matrix.test.ts` : f)))] : files;
+    const tests = await this.effects.runTests(worktree, runnable);
     await this.db.finishAgentRun(run.id, { status: tests.ok ? "failed" : "passed", summary: tests.output.slice(-2000) });
     if (tests.ok) return this.escalate(task, "The new tests pass before the change, so they do not test it.");
     await this.db.updateTask(task.id, { context: { lockedFiles: files, feedback: [] } });
@@ -451,6 +471,11 @@ export class Orchestrator {
       if (!(await this.effects.env.isUp())) {
         return await this.escalate(task, `The local app did not start. End of ${logPath}:\n${this.effects.env.logTail(logPath)}`);
       }
+      // The changed UI units first, by code: each fixture on the harness page, with a screenshot.
+      if (this.config.verify) {
+        const failed = await this.verifyUnitsInBrowser(task, this.config.verify);
+        if (failed) return;
+      }
       const browserUrl = new URL(task.context.browserPath ?? "/", this.config.browserBaseUrl).toString();
       const result = await this.runAgent(task, "browser_check", { browserUrl });
       if (!result.ok) return await this.escalate(task, `The browser run stopped: ${result.subtype}. ${result.text.slice(0, 500)}`);
@@ -474,6 +499,31 @@ export class Orchestrator {
       if (pid !== null) await this.effects.env.stop(pid);
       await this.db.releaseLease(ENV_LEASE);
     }
+  }
+
+  /** Returns true when it sent the task back (a unit failed in the browser). */
+  private async verifyUnitsInBrowser(task: Task, verify: VerifyContext): Promise<boolean> {
+    const units = verifyUnits([...(task.context.lockedFiles ?? []), ...(await this.effects.diff(task.worktree!)).map((c) => c.path)], verify.dir);
+    if (units.length === 0) return false;
+    const run = await this.db.startAgentRun(task.id, "browser_check", "verify");
+    const rel = join("tasks", task.id, run.id);
+    const outDir = join(this.config.artifactRoot, rel);
+    mkdirSync(outDir, { recursive: true });
+    const { results, missing } = await this.effects.verifyInBrowser({ baseUrl: this.config.browserBaseUrl, entry: verify.entry, units, outDir });
+    for (const r of results) {
+      if (r.screenshot) await this.db.addArtifact(task.id, { kind: "screenshot", path: join(rel, r.screenshot), label: `${r.unit} / ${r.fixture}: ${r.verdict}` });
+    }
+    const bad = results.filter((r) => r.verdict !== "PASS");
+    const feedback = [
+      ...missing.map((u) => `The harness page does not list the unit ${u}: import its spec in ${verify.dir}/specs/index.ts and make sure it registers.`),
+      ...bad.map((r) => `In the browser, ${r.unit} / ${r.fixture} is ${r.verdict}: ${r.failures.join("; ") || "no detail"}`),
+    ];
+    const summary = `${results.length - bad.length}/${results.length} fixtures pass in the browser${missing.length ? `; ${missing.length} unit(s) not listed` : ""}`;
+    await this.db.finishAgentRun(run.id, { status: feedback.length ? "failed" : "passed", summary });
+    await this.db.updateTask(task.id, { context: { verified: { units, passed: results.length - bad.length, total: results.length } } });
+    if (feedback.length === 0) return false;
+    await this.fail(task, "browser_check", `The verify specs failed in the browser: ${summary}`, feedback);
+    return true;
   }
 
   private async publish(task: Task, output: Record<string, unknown>): Promise<void> {
@@ -617,6 +667,7 @@ export function factoryFooter(task: Task): string {
     ...(Object.keys(task.phaseModels).length ? [`- Model overrides: ${Object.entries(task.phaseModels).map(([p, m]) => `${p} ${m}`).join(", ")}`] : []),
     `- Estimated agent cost: $${task.costUsd.toFixed(2)}`,
     ...(c.noTestsReason ? [`- No new unit tests: ${c.noTestsReason}`] : []),
+    ...(c.verified ? [`- UI units checked in the browser: ${c.verified.units.join(", ")} (${c.verified.passed}/${c.verified.total} fixtures pass)`] : []),
     ...(c.untested ?? []).map((u) => `- Not checked in the browser: ${u.criterion} (${u.reason})`),
     ...(c.decisions?.length ? ["", "### Decisions the decider made", "", ...c.decisions.map((d) => `- ${d.stage}: ${d.question} **${d.answer}**`)] : []),
     ...(c.followUps?.length ? ["", "### Follow-ups", "", ...c.followUps.map((f) => `- ${f}`)] : []),

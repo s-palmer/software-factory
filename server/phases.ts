@@ -32,6 +32,34 @@ export interface PhaseContext {
   tracker?: PhaseTracker | undefined;
   /** What the run may touch. Without it, a run gets only the fixed denies (tests of prompt building). */
   isolation?: Isolation | undefined;
+  /** Runtime verification for UI units, when the project has it (`verify` in the config). */
+  verify?: VerifyContext | undefined;
+}
+
+/** `dir`: the framework's folder from the project folder. `entry`: the harness page in the running app. */
+export type VerifyContext = { dir: string; entry: string };
+
+const VERIFY_FRAMEWORK = ["core", "verifiers", "harness"];
+
+/** What each stage does about verify specs. */
+function verifyRules(stage: AgentStage, v: VerifyContext): string {
+  const guide = `\`${v.dir}/README.md\``;
+  switch (stage) {
+    case "design":
+      return `\n## UI units\n\nThis project checks UI components with runtime verification (${guide}). In the task list, name each UI component this change adds or changes as a unit, with the DOM contract it will emit (the \`verifyAttrs\` keys and what each means) and the fixtures that matter, including at least one edge case.\n`;
+    case "test_writing":
+      return `\n## UI units\n\nThis project checks UI components with runtime verification. Read ${guide}. For each UI unit in the task list, write \`${v.dir}/specs/<Unit>.verify.ts\` with fixtures (at least one \`probe: true\`) and invariants on the DOM contract, and import it in \`${v.dir}/specs/index.ts\`. Return the spec files and \`${v.dir}/specs/index.ts\` in \`testFiles\` with your other tests; the factory runs them through \`${v.dir}/matrix.test.ts\`.\n`;
+    case "implementing":
+      return `\n## UI units\n\nThe locked \`.verify.ts\` specs describe each UI unit. Its root element must spread \`verifyAttrs({ unit: "<Id>", ...state })\` (from \`${v.dir}/core/contract\`) with the keys its spec reads. Do not change ${VERIFY_FRAMEWORK.map((d) => `\`${v.dir}/${d}/\``).join(", ")}: they judge your work. The factory opens each unit's fixtures in the browser after review.\n`;
+    default:
+      return "";
+  }
+}
+
+/** The framework's folders: no phase may edit them. */
+function verifyDenies(v: VerifyContext | undefined): object | undefined {
+  if (!v) return undefined;
+  return { permissions: { deny: VERIFY_FRAMEWORK.map((d) => `Edit(./${v.dir}/${d}/**)`) } };
 }
 
 export type PhaseTracker = { label: string; name: string; server: Record<string, unknown>; tools: string[] | "*"; instructions: string };
@@ -354,7 +382,12 @@ function stageTools(stage: AgentStage, tools: ToolRules): string[] {
 }
 
 export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): ClaudeCall {
-  const prompt = PROMPTS[stage](task, ctx) + howToWork(stage, task, ctx) + lockedBlock(stage === "implementing" ? ctx.lockedFiles : []) + feedbackBlock(ctx.feedback);
+  const prompt =
+    PROMPTS[stage](task, ctx) +
+    (ctx.verify ? verifyRules(stage, ctx.verify) : "") +
+    howToWork(stage, task, ctx) +
+    lockedBlock(stage === "implementing" ? ctx.lockedFiles : []) +
+    feedbackBlock(ctx.feedback);
   const tracker = trackerAccess(ctx);
   return {
     prompt,
@@ -364,7 +397,7 @@ export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): Cla
     mcpServers: { ...tracker.servers, ...(stage === "browser_check" && ctx.browserMcp ? { playwright: ctx.browserMcp } : {}) },
     outputSchema: SCHEMAS[stage],
     maxBudgetUsd: BUDGETS[stage],
-    settings: mergeSettings(ctx.isolation && isolationSettings(ctx.isolation), stage === "implementing" ? ctx.settings : undefined),
+    settings: mergeSettings(ctx.isolation && isolationSettings(ctx.isolation), verifyDenies(ctx.verify), stage === "implementing" ? ctx.settings : undefined),
     model: ctx.model,
   };
 }

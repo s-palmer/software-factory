@@ -103,6 +103,8 @@ export interface TaskContext {
   escalation?: string;
   escalatedFrom?: TaskStatus;
   envWait?: string;
+  /** UI units checked on the harness page in the browser check. */
+  verified?: { units: string[]; passed: number; total: number };
   /** The GitHub issue, read by the factory when the task starts. Trackers behind MCP are read by the agents. */
   ticket?: { title: string; body: string; url: string; comments: string[] };
 }

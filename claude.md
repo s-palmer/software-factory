@@ -25,7 +25,7 @@ The factory runs with no human input and never merges. Agents drive the factory 
 - `cli/`: the `factory` CLI. `init.ts` sets up a target repository; everything else calls the API.
 - `.claude/skills/`: the phase skills every stage reads. They ship with the factory; target repositories need no copy.
 - `src/dashboard/`: humans give tasks, review screenshots and send feedback. Components are verifiable units; pages do data fetching.
-- `src/verify/`: the runtime verification framework and the specs for each unit.
+- `src/verify/`: the runtime verification framework and the dashboard's own specs. `factory init` copies `core/`, `verifiers/` and `harness/` into target React apps, with the files in `templates/verify/`, so keep those folders free of anything specific to this dashboard.
 
 ## Rules
 

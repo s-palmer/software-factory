@@ -18,6 +18,7 @@ ticket (GitHub issue, Jira, Linear, ...)
 - **Failures loop back.** A failed check, review, browser check, CI run or change request sends the task back to `implementing` with the failure as feedback. After three failed attempts in a row, the task stops in `escalated`.
 - **No questions to people.** A decider agent answers the other agents' questions. It escalates only for money, legal text, security or stored data.
 - **A browser check.** For a change with a visible effect, an agent opens your app in headless Chromium through the Playwright MCP server, checks each acceptance criterion and takes screenshots.
+- **Runtime verification for React UI** (optional). The test agent writes a `.verify.ts` spec for each UI component it adds or changes: fixtures, edge cases and checks on the rendered DOM. The specs run in Vitest with your other tests, and the factory opens every fixture of the changed components in the browser and keeps a screenshot of each. See [Runtime verification](#runtime-verification).
 - **Isolated agents.** Each agent works in its own git worktree. Its file tools cannot leave the worktree, and its shell commands, including the tests it runs, run in Claude Code's OS sandbox: no reads of the rest of your home folder (other projects, credentials, the factory's own data), and no network unless you allow a host.
 - **Risk labels.** A pull request that changes a path in the policy (tests, build config, dependencies, auth, payments, migrations, secrets, CI) or is too large gets `risk:high`.
 
@@ -45,6 +46,8 @@ The factory keeps all its state in `~/.factory/<repo name>/`, outside both repos
 | `.claude/skills/` | The skills each stage follows (spec, design, TDD, implement, review, pull request), and `factory-setup`, which sets up a repository from Claude Code |
 | `prompts/` | The rules for every headless run, and the conductor agent's prompt |
 | `src/dashboard/` | Web UI to add tasks, follow progress, review screenshots, answer escalations, and see the local environment |
+| `src/verify/` | The runtime verification framework. `factory init` copies it into React apps; the dashboard also uses it for its own tests |
+| `templates/verify/` | The harness page, matrix test and guide that `factory init` adds around the framework |
 | `docs/INTERFACE.md` | The contract for agents that drive the factory |
 
 ## Prerequisites
@@ -97,7 +100,7 @@ cd /path/to/your-app
 factory init
 ```
 
-`init` asks where your tickets live (`github`, `jira` or `linear`), the base branch, and how to start your app. It writes `factory.config.json` with presets for your package manager, then checks what the factory needs: git remote, `gh`, `claude`, the base branch, Vitest, TypeScript, the tracker's MCP server and its sign-in, and on Linux the sandbox tools. It prints how to fix anything that is missing. For scripts, `factory init --yes --tracker jira --repo <dir>` takes the defaults without questions, and `--json` prints the result as JSON.
+`init` asks where your tickets live (`github`, `jira` or `linear`), the base branch, how to start your app, and, for a React and Vite app, whether to add runtime verification. It writes `factory.config.json` with presets for your package manager, then checks what the factory needs: git remote, `gh`, `claude`, the base branch, Vitest, TypeScript, the tracker's MCP server and its sign-in, and on Linux the sandbox tools. It prints how to fix anything that is missing. For scripts, `factory init --yes --tracker jira --repo <dir>` takes the defaults without questions, and `--json` prints the result as JSON.
 
 For Jira, `init` prints these steps (Linear is the same with `https://mcp.linear.app/mcp/readonly`):
 
@@ -155,6 +158,22 @@ Agents that drive the factory set `FACTORY_ACTOR=agent:<name>` and pass `--json`
 
 The factory also has a PM run (`factory plan "#7"` or `factory plan specs/idea.md`), which turns an idea into a spec, files tickets as GitHub issues and creates the tasks. It works only when tickets are GitHub issues.
 
+### Runtime verification
+
+For a React and Vite app, `factory init` offers to copy the verification framework into `src/verify/` and add a harness page, `verify.html`, which your dev server serves next to the app (`--verify` or `--no-verify` skip the question). With it on:
+
+```
+design        -> names each UI component the ticket touches, the DOM contract it will emit, and the fixtures that matter
+test_writing  -> writes src/verify/specs/<Component>.verify.ts (fixtures, at least one edge case, invariants) next to the unit tests
+implementing  -> the component's root element emits the contract with verifyAttrs(...); the specs are locked
+gate          -> src/verify/matrix.test.ts runs every spec in jsdom with your test command
+browser_check -> the factory opens each fixture of the changed components on verify.html, records PASS or FAIL and a
+                 screenshot, sends failures back to implement, then the agent checks the pages as usual
+pull request  -> the footer lists the components checked and how many fixtures pass
+```
+
+Agents may not change the framework itself (`core/`, `verifiers/`, `harness/`), and the policy marks those paths high risk. `src/verify/README.md` in your repository explains how to write a spec. It needs `react`, `react-dom`, `zod` and `jsdom`; `init` tells you which are missing. Run `factory init --force` to update the framework; it never replaces your specs.
+
 ### The local environment
 
 The browser check runs against a copy of your app that the factory starts from the task's worktree with `app.start`, and stops afterwards. Only one copy runs at a time. The dashboard's **Environment** page (`/env`, or `factory env`) shows whether it is up, which task runs it and since when, which tasks wait for it, and the end of its log. If something outside the factory answers on the app's URL, the page names the process on the port, and browser checks wait until it stops. You can also start a copy from your checkout there, for example to look at the app yourself; tasks wait while you hold it.
@@ -184,6 +203,7 @@ The browser check runs against a copy of your app that the factory starts from t
   "maxAttempts": 3,
   "tracker": { "type": "github" },
   "sandbox": { "allowedDomains": [], "allowRead": [] },
+  "verify": { "enabled": true, "dir": "src/verify", "entry": "/verify.html" },
   "policy": {
     "alwaysHuman": [
       { "pattern": "factory.config.json", "reason": "Changes the factory config or risk policy" },
@@ -210,6 +230,7 @@ The browser check runs against a copy of your app that the factory starts from t
 | `maxAttempts` | Failed attempts in a row before a task escalates |
 | `tracker` | `{ "type": "github" }`, or an MCP tracker: `name`, `label`, `server` (an MCP server entry), `tools` (read tools, or `"*"` for a read-only server), `keyPattern`, `instructions`. `factory init` writes the Jira and Linear presets |
 | `sandbox.allowedDomains` | Hosts the agents' shell commands and tests may reach. None by default |
+| `verify.enabled`, `verify.dir`, `verify.entry` | Runtime verification for React UI: on or off, where the framework lives, and the harness page in the running app |
 | `sandbox.allowRead` | Folders outside the worktree the project's tools must read. The rest of the home folder is denied |
 | `policy` | Paths that make a pull request high risk, and the size limits |
 

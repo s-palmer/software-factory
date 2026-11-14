@@ -30,6 +30,10 @@
         "reason": "Changes the verification framework or specs"
       },
       {
+        "pattern": "templates/**",
+        "reason": "Changes the verification files the factory copies into repositories"
+      },
+      {
         "pattern": "**/*.test.ts",
         "reason": "Changes unit tests"
       },
@@ -88,5 +92,10 @@
     ],
     "maxChangedFiles": 20,
     "maxChangedLines": 400
+  },
+  "verify": {
+    "enabled": true,
+    "dir": "src/verify",
+    "entry": "/verify"
   }
 }

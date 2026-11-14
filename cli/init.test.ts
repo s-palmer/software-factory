@@ -122,6 +122,38 @@ describe("factory init", () => {
     expect(checks.map((c) => c.name)).toContain("sandbox (bubblewrap, socat)");
   });
 
+  it("copies the verification framework into a React and Vite app", async () => {
+    const dir = project({ "package.json": JSON.stringify({ dependencies: { react: "19", "react-dom": "19" }, devDependencies: { vite: "8", vitest: "5", typescript: "5" } }) });
+    const fake = io(dir);
+    expect(await initProject(dir, quiet({ json: true }), fake)).toBe(1);
+    const out = JSON.parse(fake.lines[0]!) as { verifyFiles: string[]; checks: Array<{ name: string; ok: boolean; detail: string }> };
+    for (const f of ["src/verify/core/registry.ts", "src/verify/harness/UnitPage.tsx", "src/verify/verifiers/a11y.ts", "src/verify/entry.tsx", "src/verify/matrix.test.ts", "src/verify/specs/index.ts", "src/verify/README.md", "verify.html"]) {
+      expect(out.verifyFiles).toContain(f);
+      expect(existsSync(join(dir, f))).toBe(true);
+    }
+    expect(out.verifyFiles.some((f) => f.endsWith(".test.ts") && f !== "src/verify/matrix.test.ts")).toBe(false);
+    expect(readFileSync(join(dir, "verify.html"), "utf8")).toContain('src="/src/verify/entry.tsx"');
+    expect(readFileSync(join(dir, "src/verify/entry.tsx"), "utf8")).toContain("`/verify.html?unit=");
+    const config = readConfig(dir);
+    expect(config.verify).toEqual({ enabled: true, dir: "src/verify", entry: "/verify.html" });
+    expect(config.policy.alwaysHuman.map((r: { pattern: string }) => r.pattern)).toEqual(expect.arrayContaining(["src/verify/core/**", "verify.html"]));
+    expect(out.checks.find((c) => c.name === "verification dependencies")?.detail).toBe("add them: pnpm add -D zod jsdom");
+  });
+
+  it("leaves verification out when asked, and never replaces the specs", async () => {
+    const reactApp = { "package.json": JSON.stringify({ dependencies: { react: "19" }, devDependencies: { vite: "8" } }) };
+    const off = project(reactApp);
+    await initProject(off, quiet({ verify: false }), io(off));
+    expect(readConfig(off).verify.enabled).toBe(false);
+    expect(existsSync(join(off, "src/verify"))).toBe(false);
+
+    const on = project(reactApp);
+    await initProject(on, quiet(), io(on));
+    writeFileSync(join(on, "src/verify/specs/index.ts"), 'import "./Cart.verify";\n');
+    await initProject(on, quiet({ force: true }), io(on));
+    expect(readFileSync(join(on, "src/verify/specs/index.ts"), "utf8")).toBe('import "./Cart.verify";\n');
+  });
+
   it("refuses a folder that is not a git repository", async () => {
     const dir = project({});
     expect(await initProject(dir, quiet(), io(dir, { failing: ["git rev-parse"] }))).toBe(2);

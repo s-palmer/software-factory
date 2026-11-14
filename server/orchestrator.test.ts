@@ -9,7 +9,7 @@ import { MODELS } from "../shared/models";
 import type { FileChange, RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
 import { FactoryDb } from "./db";
-import { Orchestrator, type Effects, type GateResult, type OrchestratorConfig, type PrStatus } from "./orchestrator";
+import { Orchestrator, type Effects, type GateResult, type OrchestratorConfig, type PrStatus, type VerifyRun } from "./orchestrator";
 
 const policy: RiskPolicy = { alwaysHuman: [{ pattern: "factory.config.json", reason: "Changes the policy" }], maxChangedFiles: 20, maxChangedLines: 400 };
 
@@ -55,6 +55,13 @@ class Fakes implements Effects {
   async createWorktree(task: Task) {
     return { branch: `factory/${task.id.slice(0, 8)}`, worktree: `/tmp/wt/${task.id}` };
   }
+  verifyCalls: Array<{ units: string[] }> = [];
+  verifyResults: VerifyRun[] = [];
+  async verifyInBrowser(opts: { baseUrl: string; entry: string; units: string[]; outDir: string }) {
+    this.verifyCalls.push({ units: opts.units });
+    const results = this.verifyResults.filter((r) => opts.units.includes(r.unit));
+    return { results, missing: opts.units.filter((u) => !results.some((r) => r.unit === u)) };
+  }
   issuesRead: string[] = [];
   async fetchIssue(_cwd: string, key: string) {
     this.issuesRead.push(key);
@@ -72,7 +79,9 @@ class Fakes implements Effects {
   async typecheckTests() {
     return this.testTypes;
   }
-  async runTests() {
+  testRuns: string[][] = [];
+  async runTests(_w: string, files: string[]) {
+    this.testRuns.push(files);
     return { ok: this.testsPassBeforeChange, output: this.testsPassBeforeChange ? "1 passed" : "1 failed: thing is not a function" };
   }
   async commitAndPush(_w: string, _b: string, _m: string, force?: boolean) {
@@ -259,6 +268,55 @@ describe("tickets", () => {
     expect(s.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([`/fh/worktrees/${task.id}`, "/code/app/.git"]));
     expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/fh", "/code/app"]));
     expect(s.hooks).toBeDefined();
+  });
+});
+
+describe("runtime verification", () => {
+  const verify = { dir: "src/verify", entry: "/verify.html" };
+  const spec = "src/verify/specs/CartSummary.verify.ts";
+  const withSpecs = () => {
+    make({ verify });
+    for (const f of [spec, "src/verify/specs/index.ts"]) fakes.files.add(f);
+    fakes.script("test writing", { summary: "Wrote tests.", testFiles: ["src/thing.test.ts", spec, "src/verify/specs/index.ts"], questions: [] });
+  };
+
+  it("runs new specs through the matrix test in the red check, and asks for specs in the prompts", async () => {
+    withSpecs();
+    fakes.verifyResults = [{ unit: "CartSummary", fixture: "empty", verdict: "PASS", failures: [], screenshot: "CartSummary--empty.png" }];
+    const task = await newTask();
+    await drive(task.id);
+    expect(fakes.testRuns[0]).toEqual(["src/thing.test.ts", "src/verify/matrix.test.ts"]);
+    expect(fakes.calls.find((c) => c.prompt.startsWith("# Phase: test writing"))!.prompt).toContain("src/verify/specs/<Unit>.verify.ts");
+    const implement = fakes.calls.find((c) => c.prompt.startsWith("# Phase: implement"))!;
+    expect(implement.prompt).toContain("verifyAttrs");
+    expect((implement.call.settings as { permissions: { deny: string[] } }).permissions.deny).toContain("Edit(./src/verify/core/**)");
+  });
+
+  it("opens the changed units' fixtures in the browser before the agent, and keeps the screenshots", async () => {
+    withSpecs();
+    fakes.verifyResults = [
+      { unit: "CartSummary", fixture: "two-items", verdict: "PASS", failures: [], screenshot: "CartSummary--two-items.png" },
+      { unit: "CartSummary", fixture: "empty", verdict: "PASS", failures: [], screenshot: "CartSummary--empty.png" },
+    ];
+    const task = await newTask();
+    expect(await drive(task.id)).toContain("done");
+    expect(fakes.verifyCalls).toEqual([{ units: ["CartSummary"] }]);
+    const detail = await get(task.id);
+    expect(detail.context.verified).toEqual({ units: ["CartSummary"], passed: 2, total: 2 });
+    const artifacts = (await db.getTaskDetail(task.id))!.artifacts;
+    expect(artifacts.map((a) => a.label)).toEqual(expect.arrayContaining(["CartSummary / empty: PASS"]));
+    expect(fakes.prBodies.at(-1)).toContain("UI units checked in the browser: CartSummary (2/2 fixtures pass)");
+  });
+
+  it("sends a unit that fails in the browser back to implement, with what failed", async () => {
+    withSpecs();
+    fakes.verifyResults = [{ unit: "CartSummary", fixture: "empty", verdict: "FAIL", failures: ["empty-disables-checkout: button state wrong"], screenshot: "x.png" }];
+    const task = await newTask();
+    const stages = await drive(task.id, 12);
+    expect(stages).toEqual(expect.arrayContaining(["browser_check", "implementing"]));
+    expect(stages.indexOf("implementing", stages.indexOf("browser_check"))).toBeGreaterThan(-1);
+    const feedback = fakes.calls.filter((c) => c.prompt.startsWith("# Phase: implement")).at(1)?.prompt ?? "";
+    expect(feedback).toContain("CartSummary / empty is FAIL: empty-disables-checkout: button state wrong");
   });
 });
 

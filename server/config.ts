@@ -134,6 +134,7 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       browserMcp,
       skillsDir: SKILLS_DIR,
       tracker: project.tracker.type === "mcp" ? project.tracker : undefined,
+      verify: project.verify.enabled ? { dir: project.verify.dir, entry: project.verify.entry } : undefined,
       isolation: { repo, home, skillsDir: SKILLS_DIR, allowedDomains: project.sandbox.allowedDomains, allowRead: project.sandbox.allowRead },
       // The agents may run the checks themselves, but never install packages or start the app.
       tools: { run: [commands.lint, commands.typecheck, commands.test].filter((c): c is string => !!c), deny: [commands.install, commands.sync, ...(start ? [start] : [])] },

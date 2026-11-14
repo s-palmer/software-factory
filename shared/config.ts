@@ -150,6 +150,20 @@ export const ProjectConfig = z.object({
   policy: RiskPolicy.default(DEFAULT_POLICY),
   tracker: TrackerConfig.default({ type: "github" }),
   /**
+   * Runtime verification for React UI (`factory init` copies the framework into `dir`). When on, the test phase
+   * writes a `<Unit>.verify.ts` spec for each UI unit it adds or changes, the gate runs them in jsdom, and the
+   * browser check opens each changed unit's fixtures in the task's app before the agent looks at the pages.
+   */
+  verify: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** The framework's folder, relative to `projectDir`. Specs go in `<dir>/specs/`. */
+      dir: z.string().min(1).default("src/verify"),
+      /** The harness page in the running app that lists every unit (`window.__verify`). */
+      entry: z.string().min(1).default("/verify.html"),
+    })
+    .prefault({}),
+  /**
    * Agents' shell commands, and the tests they start, run in Claude Code's sandbox: they can read and write their
    * own worktree only, and reach no network host except these.
    */

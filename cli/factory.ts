@@ -483,7 +483,7 @@ export function helpText(): string {
   return [
     "Usage: factory <command> [options]",
     "",
-    table([["  factory init [--yes] [--tracker github|jira|linear] [--repo <dir>] [--force]", "Set up a repository: ask a few questions, write factory.config.json, check what is missing"], ...rows]),
+    table([["  factory init [--yes] [--tracker github|jira|linear] [--[no-]verify] [--repo <dir>] [--force]", "Set up a repository: ask a few questions, write factory.config.json, check what is missing"], ...rows]),
     "",
     "Options for every command:",
     "  --json            print one JSON document (also for errors)",

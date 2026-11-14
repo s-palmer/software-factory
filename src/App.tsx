@@ -31,7 +31,6 @@ export function App() {
         <a href="/env">Environment</a>
         <a href="/models">Models</a>
         <a href="/runs">Test runs</a>
-        <a href="/verify">Verification</a>
       </nav>
       <main>{route(parts)}</main>
     </>

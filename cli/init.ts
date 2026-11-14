@@ -6,8 +6,9 @@
  * the factory needs, and prints how to fix what is missing, including the MCP server to add for Jira or Linear.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CONFIG_FILE,
   commandsFor,
@@ -34,6 +35,61 @@ export interface InitOptions {
   base?: string | undefined;
   start?: string | undefined;
   url?: string | undefined;
+  /** Copy in the runtime verification framework. Default: yes for a React and Vite app. */
+  verify?: boolean | undefined;
+}
+
+/** The factory's own copy of the framework, and the files it adds around it in a target repository. */
+const FACTORY_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const FRAMEWORK_DIRS = ["core", "verifiers", "harness"];
+const TEMPLATES = join(FACTORY_ROOT, "templates/verify");
+
+export function isReactVite(dir: string): boolean {
+  const pkg = readPackageJson(dir);
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  return Boolean(deps.react && deps.vite);
+}
+
+/**
+ * Copies the verification framework into `<projectDir>/<verify.dir>` and the harness page next to the app's
+ * index.html. Framework files are replaced only with `force`; specs are never touched.
+ */
+export function installVerify(projectRoot: string, verify: ProjectConfig["verify"], force: boolean): string[] {
+  const dir = join(projectRoot, verify.dir);
+  const written: string[] = [];
+  const fill = (text: string) => text.replaceAll("{{dir}}", verify.dir).replaceAll("{{entry}}", verify.entry);
+  const put = (file: string, text: string, overwrite: boolean) => {
+    if (existsSync(file) && !overwrite) return;
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    written.push(relative(projectRoot, file));
+  };
+  for (const sub of FRAMEWORK_DIRS) {
+    const from = join(FACTORY_ROOT, "src/verify", sub);
+    for (const name of readdirSync(from)) {
+      if (/\.test\.tsx?$/.test(name)) continue;
+      const to = join(dir, sub, name);
+      if (existsSync(to) && !force) continue;
+      mkdirSync(dirname(to), { recursive: true });
+      cpSync(join(from, name), to);
+      written.push(relative(projectRoot, to));
+    }
+  }
+  put(join(dir, "entry.tsx"), fill(readFileSync(join(TEMPLATES, "entry.tsx"), "utf8")), force);
+  put(join(dir, "matrix.test.ts"), fill(readFileSync(join(TEMPLATES, "matrix.test.ts"), "utf8")), force);
+  put(join(dir, "README.md"), fill(readFileSync(join(TEMPLATES, "README.md"), "utf8")), force);
+  put(join(dir, "specs/index.ts"), readFileSync(join(TEMPLATES, "specs/index.ts"), "utf8"), false);
+  put(join(projectRoot, verify.entry.replace(/^\//, "")), fill(readFileSync(join(TEMPLATES, "verify.html"), "utf8")), force);
+  return written;
+}
+
+/** Paths an agent must not change without a person: the framework that judges its work. */
+export function verifyPolicy(verify: ProjectConfig["verify"]) {
+  return [
+    ...FRAMEWORK_DIRS.map((sub) => ({ pattern: `${verify.dir}/${sub}/**`, reason: "Changes the verification framework" })),
+    { pattern: `${verify.dir}/entry.tsx`, reason: "Changes the verification harness" },
+    { pattern: verify.entry.replace(/^\//, ""), reason: "Changes the verification harness" },
+  ];
 }
 
 export interface InitIo {
@@ -70,18 +126,20 @@ function readPackageJson(dir: string): PackageJson | null {
 }
 
 /** The config `factory init` writes: presets for the package manager, the dev server if there is one, the default policy. */
-export function defaultConfig(dir: string, choices: { tracker?: TrackerChoice; base?: string; start?: string | null; url?: string } = {}): ProjectConfig {
+export function defaultConfig(dir: string, choices: { tracker?: TrackerChoice; base?: string; start?: string | null; url?: string; verify?: boolean } = {}): ProjectConfig {
   const pm = detectPackageManager(dir);
   const scripts = readPackageJson(dir)?.scripts ?? {};
   const commands = commandsFor(pm);
   const url = choices.url ?? "http://localhost:5173";
   const start = choices.start === undefined ? (scripts.dev ? `${pm} run dev` : null) : choices.start;
+  const verify = ProjectConfig.shape.verify.parse({ enabled: choices.verify ?? false });
   return ProjectConfig.parse({
     ...(choices.base ? { base: choices.base } : {}),
     commands: scripts.lint ? commands : { ...commands, lint: undefined },
     app: start ? { start, url, healthUrls: [url] } : { url },
-    policy: DEFAULT_POLICY,
+    policy: verify.enabled ? { ...DEFAULT_POLICY, alwaysHuman: [...DEFAULT_POLICY.alwaysHuman, ...verifyPolicy(verify)] } : DEFAULT_POLICY,
     tracker: TRACKER_PRESETS[choices.tracker ?? "github"],
+    verify,
   });
 }
 
@@ -102,7 +160,7 @@ export function mcpSetup(tracker: TrackerConfig): string[] {
 
 const TRACKERS = Object.keys(TRACKER_PRESETS) as TrackerChoice[];
 
-async function choose(io: InitIo, opts: InitOptions, root: string): Promise<{ tracker: TrackerChoice; base: string; start: string | null; url: string }> {
+async function choose(io: InitIo, opts: InitOptions, root: string): Promise<{ tracker: TrackerChoice; base: string; start: string | null; url: string; verify: boolean }> {
   const pm = detectPackageManager(root);
   const scripts = readPackageJson(root)?.scripts ?? {};
   const remoteHead = io.run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], root)?.replace(/^origin\//, "");
@@ -111,6 +169,7 @@ async function choose(io: InitIo, opts: InitOptions, root: string): Promise<{ tr
     base: opts.base ?? remoteHead ?? "main",
     start: opts.start ?? (scripts.dev ? `${pm} run dev` : ""),
     url: opts.url ?? "http://localhost:5173",
+    verify: opts.verify ?? isReactVite(root),
   };
   if (!opts.interactive) return { ...defaults, start: defaults.start || null };
 
@@ -127,7 +186,14 @@ async function choose(io: InitIo, opts: InitOptions, root: string): Promise<{ tr
   io.out(`  Package manager: ${pm} (from the lockfile).`);
   const start = (await io.ask('Command that starts your app for the browser check ("none" to skip)', defaults.start || "none")).trim();
   const url = start && start !== "none" ? (await io.ask("URL the app answers on", defaults.url)).trim() : defaults.url;
-  return { tracker, base: base || defaults.base, start: start && start !== "none" ? start : null, url: url || defaults.url };
+  let verify = false;
+  if (opts.verify !== undefined) verify = opts.verify;
+  else if (isReactVite(root)) {
+    verify = /^y/i.test(
+      await io.ask("React and Vite found. Add runtime verification (the agents write a .verify.ts spec per UI component, checked in jsdom and the browser)?", "yes"),
+    );
+  }
+  return { tracker, base: base || defaults.base, start: start && start !== "none" ? start : null, url: url || defaults.url, verify };
 }
 
 export async function initProject(cwd: string, opts: InitOptions, io: InitIo): Promise<number> {
@@ -147,13 +213,16 @@ export async function initProject(cwd: string, opts: InitOptions, io: InitIo): P
   if (existed && !opts.force && opts.interactive) write = /^y/i.test(await io.ask(`${CONFIG_FILE} exists. Replace it?`, "no"));
   const config = write ? defaultConfig(root, await choose(io, opts, root)) : ProjectConfig.parse(JSON.parse(readFileSync(file, "utf8")));
   if (write) writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  const projectRoot = join(root, config.projectDir);
+  const verifyFiles = config.verify.enabled ? installVerify(projectRoot, config.verify, opts.force) : [];
 
   const checks = runChecks(io, root, config);
   if (opts.json) {
-    io.out(JSON.stringify({ configFile: file, written: write, config, checks, mcpSetup: mcpSetup(config.tracker) }));
+    io.out(JSON.stringify({ configFile: file, written: write, config, checks, mcpSetup: mcpSetup(config.tracker), verifyFiles }));
   } else {
     io.out("");
     io.out(write ? `Wrote ${file}` : `${file} exists; left it unchanged (--force replaces it)`);
+    if (verifyFiles.length) io.out(`Added the verification framework: ${verifyFiles.length} files in ${config.verify.dir}/ and ${config.verify.entry.replace(/^\//, "")} (see ${config.verify.dir}/README.md).`);
     io.out("");
     for (const c of checks) io.out(`  ${(c.ok ? "ok" : "MISSING").padEnd(7)}  ${c.name}: ${c.detail}`);
     const setup = mcpSetup(config.tracker);
@@ -201,6 +270,10 @@ function runChecks(io: InitIo, root: string, config: ProjectConfig): Check[] {
         ? `"${name}" in Claude Code points somewhere else than ${url}`
         : `added but not signed in (${status || "unknown status"}): run /mcp in claude and sign in to "${name}"`;
     checks.push(check(`${config.tracker.label} MCP server`, !!info && (!url || info.includes(url)) && /connected/i.test(status), fix, `"${name}" connected`));
+  }
+  if (config.verify.enabled) {
+    const missing = ["react", "react-dom", "zod", "jsdom"].filter((d) => !deps[d]);
+    checks.push(check("verification dependencies", missing.length === 0, `add them: ${detectPackageManager(join(root, config.projectDir))} add -D ${missing.join(" ")}`, "react, react-dom, zod, jsdom"));
   }
   // The agents' shell commands run in Claude Code's sandbox; on Linux it needs bubblewrap and socat.
   if (io.platform === "linux") {

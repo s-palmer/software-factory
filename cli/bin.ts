@@ -19,6 +19,8 @@ if (argv[0] === "init") {
       base: { type: "string" },
       start: { type: "string" },
       url: { type: "string" },
+      verify: { type: "boolean" },
+      "no-verify": { type: "boolean" },
     },
   });
   if (values.tracker && !(values.tracker in TRACKER_PRESETS)) {
@@ -31,7 +33,7 @@ if (argv[0] === "init") {
   try {
     process.exitCode = await initProject(
       process.cwd(),
-      { force: values.force, json: values.json, interactive, repo: values.repo, tracker: values.tracker as TrackerChoice | undefined, base: values.base, start: values.start, url: values.url },
+      { force: values.force, json: values.json, interactive, repo: values.repo, tracker: values.tracker as TrackerChoice | undefined, base: values.base, start: values.start, url: values.url, verify: values["no-verify"] ? false : values.verify },
       nodeIo(ask),
     );
   } finally {

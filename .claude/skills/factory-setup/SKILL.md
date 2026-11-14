@@ -37,6 +37,7 @@ Read the repository's `package.json`, its README and its CI config, then check e
 | `sandbox.allowedDomains` | Hosts the tests must reach (agents' shell commands have no network otherwise) |
 | `sandbox.allowRead` | Folders outside the worktree the tools must read, if a test run fails with `EPERM` |
 | `projectDir` | The app's folder in a monorepo, `""` otherwise |
+| `verify.enabled` | Runtime verification for React UI. If on, check that `verify.html` loads on the dev server and that `react`, `react-dom`, `zod` and `jsdom` are installed |
 | `policy.alwaysHuman` | Add the repository's sensitive paths (auth, payments, infrastructure, migrations) |
 
 ## 4. The tracker's MCP server (Jira, Linear)

@@ -28,8 +28,17 @@ export function verifiersFor(unit: AnyUnit): Verifier[] {
   return unit.verifiers.map((id) => verifiers.get(id)).filter((v): v is Verifier => v !== undefined);
 }
 
+type RouteFormat = (unitId: string, fixtureId: string) => string;
+
+let routeFormat: RouteFormat = (unitId, fixtureId) => `/verify/${encodeURIComponent(unitId)}/${encodeURIComponent(fixtureId)}`;
+
+/** Where one fixture mounts. An app with its own router keeps `/verify/:unit/:fixture`; a separate harness page sets its own. */
+export function setRouteFormat(format: RouteFormat): void {
+  routeFormat = format;
+}
+
 export function fixtureRoute(unitId: string, fixtureId: string): string {
-  return `/verify/${encodeURIComponent(unitId)}/${encodeURIComponent(fixtureId)}`;
+  return routeFormat(unitId, fixtureId);
 }
 
 export function buildManifest(): VerifyManifestEntry[] {
