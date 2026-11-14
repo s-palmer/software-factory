@@ -1,6 +1,6 @@
 /** Request/response contracts for the factory API. Validated on the server, typed on the client. */
 import { z } from "zod";
-import { TASK_STATUSES, type TaskStatus } from "./lifecycle";
+import { GATES, TASK_STATUSES, type Gate, type TaskStatus } from "./lifecycle";
 import { PhaseModels, PhaseSchema, type Phase } from "./models";
 
 export const TaskStatusSchema = z.enum(TASK_STATUSES);
@@ -14,6 +14,8 @@ export const CreateTaskInput = z
   ticketKey: z.string().trim().min(1).max(100).optional(),
   /** Per-phase model overrides for this task; other phases use the factory defaults. */
   phaseModels: PhaseModels.default({}),
+  /** Stop for a person's approval after these stages. Without it, the repository's `gates` setting applies. */
+  gates: z.array(z.enum(GATES)).optional(),
   /** Tasks (ids or ticket keys like "#5") that must be done (merged) before this one starts. */
   blockedBy: z.array(z.string().trim().min(1)).default([]),
 })
@@ -110,6 +112,10 @@ export interface TaskContext {
   escalation?: string;
   escalatedFrom?: TaskStatus;
   envWait?: string;
+  /** The gates this task stops at, fixed when it is created or set up. */
+  gates?: Gate[];
+  /** At a gate: the stage the task stopped after. */
+  gateStage?: Gate;
   /** UI units checked on the harness page in the browser check. */
   verified?: { units: string[]; passed: number; total: number };
   /** The GitHub issue, read by the factory when the task starts. Trackers behind MCP are read by the agents. */

@@ -6,7 +6,9 @@ import { verifyAttrs } from "../../verify/core/contract";
 export interface FeedbackPanelProps {
   status: TaskStatus;
   /** The task's context: why it escalated, and the open questions. */
-  context?: Pick<TaskContext, "escalation" | "questions" | "escalatedFrom">;
+  context?: Pick<TaskContext, "escalation" | "questions" | "escalatedFrom" | "gateStage">;
+  /** At a gate: the doc the stage wrote (the solution doc after scoping, the task list after design). */
+  gateDoc?: { path: string; text: string | null } | null;
   artifacts: Artifact[];
   /** Screenshot the feedback is about (e.g. the one selected in the gallery). */
   selectedArtifactId?: string | null;
@@ -14,7 +16,7 @@ export interface FeedbackPanelProps {
   error?: string | null;
 }
 
-export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifactId = null, onSubmit, error }: FeedbackPanelProps) {
+export function FeedbackPanel({ status, context = {}, gateDoc = null, artifacts, selectedArtifactId = null, onSubmit, error }: FeedbackPanelProps) {
   const shots = artifacts.filter((a) => a.kind === "screenshot");
   const [comment, setComment] = useState("");
   const [artifactId, setArtifactId] = useState<string>(selectedArtifactId ?? "");
@@ -28,6 +30,7 @@ export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifac
   }
 
   const escalated = AWAITING_HUMAN.has(status);
+  const gate = status === "awaiting_approval";
   const hasComment = comment.trim().length > 0;
   const questions = context.questions ?? [];
 
@@ -46,10 +49,23 @@ export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifac
   return (
     <section
       className="feedback"
-      {...verifyAttrs({ unit: "FeedbackPanel", status, escalated, questions: questions.length, "has-comment": hasComment, artifact: artifactId, submitting })}
+      {...verifyAttrs({ unit: "FeedbackPanel", status, escalated, gate, questions: questions.length, "has-comment": hasComment, artifact: artifactId, submitting })}
     >
       <h2>Feedback</h2>
-      {escalated ? (
+      {gate ? (
+        <div className="decision decision--gate" role="group" aria-label="Approval">
+          <h3>Waiting for your approval{context.gateStage && <> after {statusLabel(context.gateStage)}</>}</h3>
+          {gateDoc?.text ? (
+            <>
+              <p className="decision__questions-title">{gateDoc.path}</p>
+              <pre className="decision__doc">{gateDoc.text}</pre>
+            </>
+          ) : (
+            <p className="decision__reason decision__reason--missing">{gateDoc ? `${gateDoc.path} was not found in the worktree.` : "Loading the doc..."}</p>
+          )}
+          <p className="hint">Approve to go on to the next stage, or request changes: the stage runs again with your comment.</p>
+        </div>
+      ) : escalated ? (
         <div className="decision" role="group" aria-label="Decision">
           <h3>
             Escalated{context.escalatedFrom && <> from {statusLabel(context.escalatedFrom)}</>}
@@ -94,7 +110,7 @@ export function FeedbackPanel({ status, context = {}, artifacts, selectedArtifac
         {escalated && (
           <>
             <button type="button" className="approve" disabled={submitting} onClick={() => send("approve")}>
-              Retry stage
+              {gate ? "Approve" : "Retry stage"}
             </button>
             <button type="button" className="request-changes" disabled={submitting || !hasComment} onClick={() => send("request_changes")}>
               Request changes

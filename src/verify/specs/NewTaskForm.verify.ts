@@ -19,11 +19,12 @@ const fill = async (ctx: ActContext, issue: string, blockers = "") => {
 
 /** The fixtures that submit valid input, and exactly what each must send. */
 const EXPECTED: Record<string, CreateTaskInput> = {
-  submit: { ticketKey: "#12", blockedBy: [] },
-  "hash-form": { ticketKey: "#12", blockedBy: [] },
-  "padded-form": { ticketKey: "#12", blockedBy: [] },
-  "with-blockers": { ticketKey: "#12", blockedBy: ["#5", "#6"] },
-  "jira-key": { ticketKey: "PROJ-12483", blockedBy: ["PROJ-1"] },
+  submit: { ticketKey: "#12", blockedBy: [], gates: [] },
+  "hash-form": { ticketKey: "#12", blockedBy: [], gates: [] },
+  "padded-form": { ticketKey: "#12", blockedBy: [], gates: [] },
+  "with-blockers": { ticketKey: "#12", blockedBy: ["#5", "#6"], gates: [] },
+  "jira-key": { ticketKey: "PROJ-12483", blockedBy: ["PROJ-1"], gates: [] },
+  "sign-off-both": { ticketKey: "#12", blockedBy: [], gates: ["scoping", "design"] },
 };
 
 const jira = { type: "mcp", label: "Jira", keyPattern: "^[A-Z][A-Z0-9]+-\\d+$" } as const;
@@ -31,7 +32,7 @@ const jira = { type: "mcp", label: "Jira", keyPattern: "^[A-Z][A-Z0-9]+-\\d+$" }
 registerUnit<NewTaskFormProps>({
   id: "NewTaskForm",
   title: "NewTaskForm",
-  description: "Give the factory a ticket (a GitHub issue number, or a Jira or Linear key), optionally blocked by others. No title: the agents read it from the ticket.",
+  description: "Give the factory a ticket (a GitHub issue number, or a Jira or Linear key), optionally blocked by others, with a sign-off mode (Autonomous by default). No title: the agents read it from the ticket.",
   kind: "component",
   render: (props) => {
     created.length = 0;
@@ -60,6 +61,15 @@ registerUnit<NewTaskFormProps>({
     { id: "self-blocker", probe: true, description: "Probe: an issue can't block itself.", props: { onCreate: record }, act: (ctx) => fill(ctx, "#12", "12") },
     { id: "jira-key", description: "Jira: a key in lower case is sent upper case, with its blocker.", props: { onCreate: record, tracker: jira }, act: (ctx) => fill(ctx, "proj-12483", "PROJ-1") },
     { id: "jira-not-a-key", probe: true, description: "Probe: Jira does not take a GitHub issue number.", props: { onCreate: record, tracker: jira }, act: (ctx) => fill(ctx, "#12") },
+    {
+      id: "sign-off-both",
+      description: "Choose Sign off both: the task is sent with both gates, and the choice goes back to Autonomous.",
+      props: { onCreate: record },
+      act: async (ctx) => {
+        await ctx.click("#sign-off-both");
+        await fill(ctx, "12");
+      },
+    },
     { id: "server-error", probe: true, description: "Probe: an API error is shown as an alert.", props: { onCreate: record, error: "Ticket #12 already has task 3f2a" } },
   ],
   invariants: [
@@ -73,12 +83,13 @@ registerUnit<NewTaskFormProps>({
     },
     {
       id: "sends-normalised-and-clears",
-      description: "A valid submit sends exactly { ticketKey: '#N', blockedBy: [...] } once (no title) and clears both fields",
+      description: "A valid submit sends exactly { ticketKey: '#N', blockedBy: [...], gates: [...] } once (no title), clears both fields and goes back to Autonomous",
       onlyFixtures: Object.keys(EXPECTED),
       check: ({ root, fixture }) => {
         const issue = root.querySelector<HTMLInputElement>("#task-issue")?.value;
         const blockers = root.querySelector<HTMLInputElement>("#task-blocked-by")?.value;
-        return (JSON.stringify(created) === JSON.stringify([EXPECTED[fixture.id]]) && issue === "" && blockers === "") ||
+        const autonomous = root.querySelector<HTMLInputElement>("#sign-off-none")?.checked;
+        return (JSON.stringify(created) === JSON.stringify([EXPECTED[fixture.id]]) && issue === "" && blockers === "" && autonomous === true) ||
           `created=${JSON.stringify(created)} issue="${issue}" blockers="${blockers}"`;
       },
     },
@@ -102,10 +113,10 @@ registerUnit<NewTaskFormProps>({
     },
     {
       id: "only-issue-fields",
-      description: "The form asks only for the issue and its blockers: no title or details fields",
+      description: "The form asks only for the issue, its blockers and the sign-off: no title or details fields",
       check: ({ root }) => {
         const fields = Array.from(root.querySelectorAll("input, textarea, select")).map((el) => el.id);
-        return fields.join() === "task-issue,task-blocked-by" || `fields=${fields.join()}`;
+        return fields.join() === "task-issue,task-blocked-by,sign-off-none,sign-off-scoping,sign-off-design,sign-off-both" || `fields=${fields.join()}`;
       },
     },
     {

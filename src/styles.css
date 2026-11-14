@@ -39,6 +39,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .status-badge[data-awaiting="true"] { background: #fff3c4; color: #7a5b00; }
 .status-badge[data-status="done"] { background: #dcf5e3; color: #1a7f37; }
 .status-badge[data-status="escalated"] { background: #fde2e1; color: #a40e26; }
+.status-badge[data-status="awaiting_approval"] { background: #ddf4ff; color: #0550ae; }
 
 .task-page header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .task-page__body { display: grid; grid-template-columns: 1fr minmax(260px, 360px); gap: 24px; align-items: start; }
@@ -85,6 +86,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .overview__stages { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
 .overview__stages li { display: flex; flex-direction: column; align-items: center; padding: 6px 4px; border-radius: 6px; background: #f3f5f8; }
 .overview__stages li[data-status="escalated"] { background: #fde2e1; }
+.overview__stages li[data-status="awaiting_approval"] { background: #ddf4ff; }
 .overview__stages li[data-count="0"] { opacity: 0.55; }
 .overview__count { font-size: 20px; font-weight: 700; }
 .overview__label { font-size: 11px; color: #555; text-align: center; }
@@ -126,6 +128,11 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 .decision__reason--missing { color: #777; font-style: italic; }
 .decision__questions-title { margin: 8px 0 4px; font-weight: 600; font-size: 13px; }
 .decision__questions { margin: 0 0 8px; padding-left: 20px; }
+.sign-off { border: 0; padding: 0; margin: 8px 0; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.sign-off legend { font-weight: 600; font-size: 13px; padding: 0; margin-bottom: 4px; }
+.sign-off__option { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
+.decision--gate { background: #f3f8ff; border-left-color: #0969da; }
+.decision__doc { margin: 0 0 8px; max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #fff; border: 1px solid #d0e0f0; border-radius: 4px; padding: 8px; font-size: 12px; line-height: 1.4; }
 .decision__questions li { margin: 2px 0; }
 
 /* ---- Models ---- */

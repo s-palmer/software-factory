@@ -71,6 +71,51 @@ describe("tasks", () => {
   });
 });
 
+describe("gates", () => {
+  const gated = async () => {
+    const task = await db.createTask({ title: "Ship it", description: "" }, "awaiting_approval");
+    await db.updateTask(task.id, { context: { gateStage: "design" } });
+    return task;
+  };
+  const decide = (id: string, decision: string, actor = "human") =>
+    app.request(`/api/tasks/${id}/feedback`, { method: "POST", headers: { "content-type": "application/json", "x-factory-actor": actor }, body: JSON.stringify({ decision, comment: "c" }) });
+
+  it("a person's approval moves the task on from the gate", async () => {
+    const task = await gated();
+    const res = await decide(task.id, "approve");
+    expect(res.status).toBe(201);
+    const moved = ((await res.json()) as { task: Task }).task;
+    expect(moved.status).toBe("test_writing");
+    expect(moved.context.gateStage).toBeUndefined();
+  });
+
+  it("an agent may comment at a gate, but not decide", async () => {
+    const task = await gated();
+    expect((await decide(task.id, "approve", "agent:pm")).status).toBe(403);
+    expect((await decide(task.id, "request_changes", "agent:pm")).status).toBe(403);
+    expect((await decide(task.id, "comment", "agent:pm")).status).toBe(201);
+  });
+
+  it("keeps a task's own gates", async () => {
+    const res = await post("/api/tasks", { title: "Gated", gates: ["scoping"] });
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as Task).context.gates).toEqual(["scoping"]);
+    expect((await post("/api/tasks", { title: "Bad", gates: ["pr"] })).status).toBe(400);
+  });
+
+  it("returns the docs from the worktree, or null when a doc is not there", async () => {
+    const worktree = mkdtempSync(join(tmpdir(), "factory-docs-"));
+    const task = await gated();
+    await db.updateTask(task.id, { worktree });
+    const before = (await (await app.request(`/api/tasks/${task.id}/docs`)).json()) as { solution: { path: string; text: string | null } };
+    expect(before.solution.text).toBeNull();
+    mkdirSync(join(worktree, before.solution.path, ".."), { recursive: true });
+    writeFileSync(join(worktree, before.solution.path), "# Solution");
+    const after = (await (await app.request(`/api/tasks/${task.id}/docs`)).json()) as { solution: { text: string } };
+    expect(after.solution.text).toBe("# Solution");
+  });
+});
+
 describe("feedback", () => {
   it("approve retries the stage that escalated, with a fresh retry budget and decider", async () => {
     const task = await escalatedTask();

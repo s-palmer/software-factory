@@ -1,5 +1,5 @@
 import type { TaskSummary } from "../../../shared/api";
-import { AWAITING_HUMAN, ESCALATED_STAGE, PIPELINE } from "../../../shared/lifecycle";
+import { APPROVAL_STAGE, AWAITING_HUMAN, ESCALATED_STAGE, PIPELINE } from "../../../shared/lifecycle";
 import { verifyAttrs } from "../../verify/core/contract";
 
 export interface PipelineOverviewProps {
@@ -10,12 +10,13 @@ export interface PipelineOverviewProps {
 export function PipelineOverview({ tasks }: PipelineOverviewProps) {
   const count = (status: string) => tasks.filter((t) => t.status === status).length;
   const escalated = count("escalated");
+  const gated = count("awaiting_approval");
   const awaiting = tasks.filter((t) => AWAITING_HUMAN.has(t.status)).length;
   const done = count("done");
   const inFlight = tasks.length - done;
 
   return (
-    <section className="overview" {...verifyAttrs({ unit: "PipelineOverview", total: tasks.length, "in-flight": inFlight, awaiting, done, escalated })}>
+    <section className="overview" {...verifyAttrs({ unit: "PipelineOverview", total: tasks.length, "in-flight": inFlight, awaiting, done, escalated, gated })}>
       <h2>Pipeline</h2>
       <p className="overview__summary">
         {tasks.length === 0 ? (
@@ -38,6 +39,12 @@ export function PipelineOverview({ tasks }: PipelineOverviewProps) {
             <span className="overview__label">{s.label}</span>
           </li>
         ))}
+        {gated > 0 && (
+          <li data-status="awaiting_approval" data-actor={APPROVAL_STAGE.actor} data-count={gated}>
+            <span className="overview__count">{gated}</span>
+            <span className="overview__label">{APPROVAL_STAGE.label}</span>
+          </li>
+        )}
         {escalated > 0 && (
           <li data-status="escalated" data-actor={ESCALATED_STAGE.actor} data-count={escalated}>
             <span className="overview__count">{escalated}</span>

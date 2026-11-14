@@ -54,6 +54,7 @@ type Flags = {
   ticket?: string;
   after?: string[];
   phase?: string[];
+  gate?: string[];
   clear?: string[];
   comment?: string;
   reason?: string;
@@ -135,7 +136,7 @@ export const COMMANDS: Record<string, Command> = {
       const data = { ok: true, loop, halt, tasks: tasks.length, waiting, costUsd, byStatus };
       const counts = Object.entries(byStatus).map(([s, n]) => `${s}: ${n}`).join(", ");
       const loopText = halt ? `HALTED by ${halt.by}: ${halt.reason}` : loop.available ? (loop.running ? "loop running" : "loop stopped") : "no orchestrator";
-      return { data, text: `factory API up, ${loopText}. ${tasks.length} task(s), ${waiting} escalated, $${costUsd.toFixed(2)} spent.${counts ? `\n${counts}` : ""}` };
+      return { data, text: `factory API up, ${loopText}. ${tasks.length} task(s), ${waiting} waiting for a person, $${costUsd.toFixed(2)} spent.${counts ? `\n${counts}` : ""}` };
     },
   },
   list: {
@@ -186,8 +187,8 @@ export const COMMANDS: Record<string, Command> = {
     },
   },
   add: {
-    usage: "add (--title <title> | --ticket <#n>) [--description <text>] [--after <task or #n>]... [--phase <phase>=<model>]...",
-    summary: "Create a task in backlog (one per ticket); --after makes it wait until those tasks are merged",
+    usage: "add (--title <title> | --ticket <#n>) [--description <text>] [--after <task or #n>]... [--phase <phase>=<model>]... [--gate scoping|design]...",
+    summary: "Create a task in backlog (one per ticket); --after makes it wait until those tasks are merged; --gate stops it for a person's approval after that stage",
     args: 0,
     run: async ({ api, flags }) => {
       // A task made from a ticket alone is titled with the key; scoping copies the real title.
@@ -197,13 +198,14 @@ export const COMMANDS: Record<string, Command> = {
         ...(flags.description ? { description: flags.description } : {}),
         ...(flags.ticket ? { ticketKey: flags.ticket } : {}),
         phaseModels: phaseModels(flags.phase),
+        ...(flags.gate ? { gates: flags.gate } : {}),
       };
       const task = await api<Task>("POST", "/api/tasks", body);
       return { data: task, text: `created ${taskLine(task)}` };
     },
   },
-  approve: { usage: "approve <task> [--comment <text>]", summary: "Retry the stage an escalated task stopped in", args: 1, run: decision("approve", false) },
-  changes: { usage: "changes <task> --comment <text>", summary: "Send an escalated task back with changes (comment required)", args: 1, run: decision("request_changes", true) },
+  approve: { usage: "approve <task> [--comment <text>]", summary: "Retry the stage an escalated task stopped in, or approve a task at a gate", args: 1, run: decision("approve", false) },
+  changes: { usage: "changes <task> --comment <text>", summary: "Send an escalated task, or a task at a gate, back with changes (comment required)", args: 1, run: decision("request_changes", true) },
   comment: { usage: "comment <task> --comment <text>", summary: "Add a comment without moving the task", args: 1, run: decision("comment", true) },
   models: {
     usage: "models <task> [--phase <phase>=<model>]... [--clear <phase>]...",
@@ -548,6 +550,7 @@ function parse(argv: string[]): { positionals: string[]; flags: Flags } {
         ticket: { type: "string" },
         after: { type: "string", multiple: true },
         phase: { type: "string", multiple: true },
+        gate: { type: "string", multiple: true },
         clear: { type: "string", multiple: true },
         comment: { type: "string" },
         reason: { type: "string" },

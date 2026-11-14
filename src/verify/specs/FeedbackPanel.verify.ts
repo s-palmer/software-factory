@@ -25,10 +25,19 @@ const escalated: FeedbackPanelProps = {
   onSubmit: record,
 };
 
+const gate: FeedbackPanelProps = {
+  status: "awaiting_approval",
+  context: { gateStage: "scoping" },
+  gateDoc: { path: "docs/factory/solution.md", text: "# Solution\n\n## Acceptance criteria\n- AC-1 The list shows an empty state.\n" },
+  artifacts: [],
+  onSubmit: record,
+};
+
 registerUnit<FeedbackPanelProps>({
   id: "FeedbackPanel",
   title: "FeedbackPanel",
-  description: "For escalated tasks: the reason and open questions, with Retry stage / Request changes. Comments are always possible.",
+  description:
+    "For escalated tasks: the reason and open questions, with Retry stage / Request changes. At a gate: the stage's doc, with Approve / Request changes. Comments are always possible.",
   kind: "component",
   render: (props) => {
     sent.length = 0;
@@ -36,7 +45,8 @@ registerUnit<FeedbackPanelProps>({
   },
   propsSchema: z.object({
     status: TaskStatusSchema,
-    context: z.object({ escalation: z.string().optional(), questions: z.array(z.string()).optional(), escalatedFrom: TaskStatusSchema.optional() }).optional(),
+    context: z.object({ escalation: z.string().optional(), questions: z.array(z.string()).optional(), escalatedFrom: TaskStatusSchema.optional(), gateStage: z.enum(["scoping", "design"]).optional() }).optional(),
+    gateDoc: z.object({ path: z.string(), text: z.string().nullable() }).nullish(),
     artifacts: z.array(z.object({ id: z.string(), kind: z.string() }).loose()),
     selectedArtifactId: z.string().nullish(),
     onSubmit: z.function(),
@@ -90,17 +100,21 @@ registerUnit<FeedbackPanelProps>({
       description: "Probe: a reason followed by a long log with unbroken paths; the log goes in a scrollable box under the first line.",
       props: { ...escalated, context: { ...escalated.context, escalation: longLog } },
     },
+    { id: "gate", description: "At the scoping gate: the solution doc word for word, with Approve and Request changes.", props: gate },
+    { id: "gate-approve", description: "Approve at a gate without a comment.", props: gate, act: (ctx) => ctx.click(".approve") },
+    { id: "gate-doc-missing", probe: true, description: "Probe: the doc is not in the worktree; the panel says so and still offers the decision.", props: { ...gate, gateDoc: { path: "docs/factory/tasks.md", text: null } } },
     { id: "server-error", probe: true, description: "Probe: an API error is shown as an alert.", props: { ...escalated, error: "Only escalated tasks take a decision" } },
   ],
   invariants: [
     {
-      id: "decisions-iff-escalated",
-      description: "The decision card, Retry stage and Request changes appear if and only if the task is escalated",
+      id: "decisions-iff-waiting",
+      description: "The decision card and Request changes appear if and only if the task waits for a person; the first button is Approve at a gate, Retry stage otherwise",
       check: ({ root, props, contract }) => {
         const approve = root.querySelector(".approve");
-        const shown = root.querySelector(".decision") !== null && approve?.textContent === "Retry stage" && root.querySelector(".request-changes") !== null;
+        const label = props.status === "awaiting_approval" ? "Approve" : "Retry stage";
+        const shown = root.querySelector(".decision") !== null && approve?.textContent === label && root.querySelector(".request-changes") !== null;
         const none = !root.querySelector(".decision, .approve, .request-changes");
-        const isEscalated = props.status === "escalated";
+        const isEscalated = props.status === "escalated" || props.status === "awaiting_approval";
         return (contract.escalated === String(isEscalated) && (isEscalated ? shown : none)) || `shown=${shown} none=${none} escalated=${contract.escalated}`;
       },
     },
@@ -154,9 +168,18 @@ registerUnit<FeedbackPanelProps>({
       check: ({ root, props }) => (root.querySelector("#feedback-artifact") !== null) === props.artifacts.some((a) => a.kind === "screenshot"),
     },
     {
+      id: "gate-shows-doc",
+      description: "At a gate the doc text is shown word for word, or a note that it is missing",
+      check: ({ root, props }) => {
+        if (props.status !== "awaiting_approval") return root.querySelector(".decision__doc") === null || "doc box outside a gate";
+        const text = props.gateDoc?.text;
+        return text ? root.querySelector(".decision__doc")?.textContent === text || "doc text differs" : root.querySelector(".decision__reason--missing") !== null || "no missing-doc note";
+      },
+    },
+    {
       id: "retry-sent",
       description: "Retry stage sends approve once, with an empty comment",
-      onlyFixtures: ["retry"],
+      onlyFixtures: ["retry", "gate-approve"],
       check: () => (sent.length === 1 && sent[0]?.decision === "approve" && sent[0].comment === "") || `sent=${JSON.stringify(sent)}`,
     },
     {

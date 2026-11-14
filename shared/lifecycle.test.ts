@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { afterDecision, afterFailure, afterSuccess, FACTORY_STAGES, PIPELINE, TASK_STATUSES, pipelineFor, pipelinePosition } from "./lifecycle";
+import { afterDecision, afterFailure, afterSuccess, FACTORY_STAGES, PIPELINE, TASK_STATUSES, pipelineFor, pipelinePosition, AWAITING_HUMAN } from "./lifecycle";
 
 describe("pipeline", () => {
-  it("covers every status exactly once (escalated aside)", () => {
-    expect(PIPELINE.map((s) => s.status)).toEqual(TASK_STATUSES.filter((s) => s !== "escalated"));
+  it("covers every status exactly once (the two stops for a person aside)", () => {
+    expect(PIPELINE.map((s) => s.status)).toEqual(TASK_STATUSES.filter((s) => !AWAITING_HUMAN.has(s)));
+  });
+
+  it("at a gate: approve goes on to the next stage, changes run the gated stage again", () => {
+    expect(afterDecision("awaiting_approval", "approve", "scoping")).toBe("design");
+    expect(afterDecision("awaiting_approval", "approve", "design")).toBe("test_writing");
+    expect(afterDecision("awaiting_approval", "request_changes", "design")).toBe("design");
+    expect(afterDecision("awaiting_approval", "approve", "implementing")).toBeNull();
+    expect(afterDecision("awaiting_approval", "approve", null)).toBeNull();
   });
 
   it("has no human gates", () => {

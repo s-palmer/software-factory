@@ -1,6 +1,6 @@
 /** HTTP API for the dashboard (and, later, the orchestrator). Pure: no filesystem or ports, so it's testable in-process. */
-import { rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Hono } from "hono";
 import { ArtifactInput, CreateTaskInput, UpdateLearningInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, type RunDetail } from "../shared/api";
 import { ACTOR_HEADER, ActorSchema, isAgent, type Actor } from "../shared/actor";
@@ -15,6 +15,7 @@ import { RunBusyError, type TestRunner } from "./runner";
 import { normalizeTicketKey, type TrackerConfig } from "../shared/config";
 import type { LocalEnv } from "./environment";
 import { applyLearnings } from "./learnings";
+import { docPaths } from "./phases";
 
 export function createApp(
   db: FactoryDb,
@@ -63,7 +64,9 @@ export function createApp(
       input.ticketKey = key.key;
     }
     try {
-      return c.json(await db.createTask(input, "backlog", c.get("actor")), 201);
+      const created = await db.createTask(input, "backlog", c.get("actor"));
+      if (input.gates) await db.updateTask(created.id, { context: { gates: input.gates } });
+      return c.json(input.gates ? await db.getTask(created.id) : created, 201);
     } catch (err) {
       if (err instanceof DuplicateTicketError) return c.json({ error: err.message, taskId: err.taskId }, 409);
       if (err instanceof UnknownBlockerError) return c.json({ error: err.message }, 400);
@@ -174,6 +177,18 @@ export function createApp(
     c.json(tracker.type === "github" ? { type: "github" } : { type: "mcp", label: tracker.label, keyPattern: tracker.keyPattern ?? null }),
   );
 
+  /** The solution doc and the task list the agents wrote, for a person to read, above all at a gate. */
+  app.get("/api/tasks/:id/docs", async (c) => {
+    const task = await db.getTask(c.req.param("id"));
+    if (!task) return c.json({ error: "Task not found" }, 404);
+    const paths = docPaths(task);
+    const read = (path: string) => {
+      const file = task.worktree ? join(task.worktree, path) : null;
+      return file && existsSync(file) ? readFileSync(file, "utf8") : null;
+    };
+    return c.json({ solution: { path: paths.solution, text: read(paths.solution) }, tasks: { path: paths.tasks, text: read(paths.tasks) } });
+  });
+
   /** The local environment for the browser check: who holds it, and a person's start and stop. */
   app.get("/api/env", async (c) => (env ? c.json(await env.status()) : c.json({ error: "The orchestrator is not configured on this server" }, 503)));
 
@@ -238,17 +253,21 @@ export function createApp(
     if (artifactId && !(await db.artifactBelongsTo(artifactId, task.id))) {
       return c.json({ error: "Screenshot does not belong to this task" }, 400);
     }
-    // Limits on agents: one retry per escalation reason, two change requests per task.
+    // Limits on agents: one retry per escalation reason, two change requests per task. A gate is a person's decision.
     const actor = c.get("actor");
+    if (isAgent(actor) && task.status === "awaiting_approval" && decision !== "comment") {
+      return c.json({ error: `${actor} may not decide at a gate; the task waits for a person's approval` }, 403);
+    }
     if (isAgent(actor) && decision === "approve" && (await db.countDecisions(task.id, actor, "approve", task.context.escalation ?? "")) >= 1) {
       return c.json({ error: `${actor} already retried this escalation once; a person must decide now` }, 403);
     }
     if (isAgent(actor) && decision === "request_changes" && (await db.countDecisions(task.id, actor, "request_changes")) >= 2) {
       return c.json({ error: `${actor} already requested changes twice on this task; a person must decide now` }, 403);
     }
-    const next = afterDecision(task.status, decision, task.context.escalatedFrom ?? null);
+    const from = task.status === "awaiting_approval" ? (task.context.gateStage ?? null) : (task.context.escalatedFrom ?? null);
+    const next = afterDecision(task.status, decision, from);
     if (!next) {
-      return c.json({ error: `Can't ${decision.replace("_", " ")} a task that is ${statusLabel(task.status)}; only escalated tasks take decisions` }, 409);
+      return c.json({ error: `Can't ${decision.replace("_", " ")} a task that is ${statusLabel(task.status)}; only escalated tasks and tasks waiting for approval take decisions` }, 409);
     }
     const feedback = await db.recordFeedback(task, { decision, comment, artifactId }, next, c.get("actor"));
     return c.json({ feedback, task: await db.getTask(task.id) }, 201);

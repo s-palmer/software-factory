@@ -63,6 +63,7 @@ factory load-plan plan.tickets.json                     # many tickets with thei
 - Blockers (`--after`, which you can repeat) take a ticket key or a task id, and must already exist as tasks (exit 2 otherwise). A task starts only when every blocker is done, that is merged. A blocker that escalated keeps its dependants waiting.
 - Give the blockers in the same call, because the loop can start a task the moment it exists.
 - The ticket is the task's spec, so write acceptance criteria in it. The factory reads a GitHub issue and gives it to every agent. Agents read a Jira or Linear ticket themselves, through the tracker's MCP server. The task takes the ticket's title once scoping has read it. The factory checks each key against the tracker: `#12` for GitHub, `keyPattern` otherwise. A wrong key exits 2.
+- Sign-off is optional. By default a task runs on its own. `--gate scoping` or `--gate design` (repeatable) stops it for a person's approval after that stage; see "Gates" below. Without `--gate`, the config's `gates` apply (empty by default).
 - Models are optional. `--phase implementing=claude-sonnet-5-5` sets the model of one stage for this task. By default Fable does scoping, design, review and the decider, and Opus does the tests, the code, the browser check and the pull request text. `factory defaults` shows and sets them for every task.
 
 The plan file for `load-plan` uses the format the PM run writes:
@@ -127,12 +128,13 @@ factory status --json               # loop on or off, halt, tasks per stage, tot
 
 ### Stages
 
-`backlog → scoping → design → test_writing → implementing → reviewing → browser_check → pr → awaiting_merge → done`, plus `escalated`.
+`backlog → scoping → design → test_writing → implementing → reviewing → browser_check → pr → awaiting_merge → done`, plus `escalated` and `awaiting_approval`.
 
 - The factory skips `browser_check` when the change has no visible effect.
 - Failures go back by themselves. A failed gate, review, browser check or CI run, and a change request, send the task back to `implementing` with the failure as feedback. Three failed attempts in a row escalate.
 - In `awaiting_merge` the pull request exists. While it is a draft, the factory is still fixing it or CI is still running. Once it is marked ready (the `pr_ready` event), it is the merge agent's turn.
-- `escalated` is the only stop. A task escalates when its attempts run out, when an agent run fails, when the decider says a question needs a person (money, legal text, security, stored data), or when the pull request is closed without a merge.
+- `awaiting_approval` is a gate the task asked for. It waits there after scoping or design (`context.gateStage`) until a person decides.
+- `escalated` is the only stop the factory chooses. A task escalates when its attempts run out, when an agent run fails, when the decider says a question needs a person (money, legal text, security, stored data), or when the pull request is closed without a merge.
 
 ## 3. Handling escalations
 
@@ -144,6 +146,10 @@ factory notify --task <task> --message "touches payments: a person must decide"
 ```
 
 The API limits agents (exit 5) to one retry per escalation reason and two change requests per task. After that, a person decides. People have no limits.
+
+### Gates
+
+A task in `awaiting_approval` waits for a person. `GET /api/tasks/:id/docs` returns the solution doc and the task list. `factory approve <task>` moves it to the next stage; `factory changes <task> --comment "..."` runs the gated stage again with the comment as feedback. Agents may comment at a gate, but a decision exits 5.
 
 ## 4. For the merge agent
 
@@ -184,6 +190,7 @@ The CLI is a thin wrapper, so agents may call the API directly, under the same r
 | GET | `/api/health` | `status` |
 | GET, POST | `/api/tasks` | `list`, `add` |
 | GET | `/api/tasks/:id` | `show` |
+| GET | `/api/tasks/:id/docs` | |
 | POST | `/api/tasks/:id/feedback` | `approve`, `changes`, `comment` |
 | PUT | `/api/tasks/:id/models` | `models` |
 | POST | `/api/tasks/:id/sync` | `sync` |

@@ -27,6 +27,9 @@ export const api = {
   listTasks: () => request<TaskSummary[]>("/api/tasks"),
   getTask: (id: string) => request<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`),
   createTask: (input: CreateTaskInput) => request<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) }),
+  /** The solution doc and the task list, from the task's worktree. `text` is null when the file is not there. */
+  getDocs: (id: string) =>
+    request<{ solution: { path: string; text: string | null }; tasks: { path: string; text: string | null } }>(`/api/tasks/${encodeURIComponent(id)}/docs`),
   sendFeedback: (id: string, input: FeedbackInput) =>
     request<{ task: Task; feedback: Feedback }>(`/api/tasks/${encodeURIComponent(id)}/feedback`, {
       method: "POST",

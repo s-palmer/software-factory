@@ -1,6 +1,6 @@
 # Simple Software Factory
 
-Turns tickets into tested pull requests with no person in the loop. Point it at a TypeScript repository that uses Vitest or Jest. Tickets can live in GitHub issues, Jira, Linear or any tracker with an MCP server.
+Turns tickets into tested pull requests. By default no person is in the loop; a task can ask for a person's sign-off. Point it at a TypeScript repository that uses Vitest or Jest. Tickets can live in GitHub issues, Jira, Linear or any tracker with an MCP server.
 
 Each stage is a headless Claude Code agent. Plain code moves the task between stages and checks every result. The factory never merges: it opens a draft pull request, fixes failing CI and review comments itself, and marks it ready for review. You, or your own merge agent, merge it.
 
@@ -16,6 +16,7 @@ ticket -> scoping -> design -> test_writing -> implementing -> reviewing -> brow
 - **Checks between stages.** Output must match a schema. Lint, type check and tests are compared with the merge base. New tests must fail before the change, and are then locked.
 - **Several tasks at once** (`maxParallelTasks`, default 3). Each has its own worktree; the local app, the merge-base checkout and writes to the shared repository are taken in turn.
 - **Failures loop back** to `implementing` with the failure as feedback. Three failures in a row escalate.
+- **Autonomous by default, sign-off per task.** A task can stop for a person's approval after scoping (the solution doc), after design (the task list), or both: the Sign-off choice in the New task form, or `factory add --gate design`. Approve goes on; Request changes runs that stage again with your comment. `gates` in the config sets a default for tasks that do not choose.
 - **No questions to people.** A decider agent answers the agents' questions, and escalates only for money, legal text, security or stored data.
 - **A browser check** for visible changes. An agent checks each acceptance criterion in your running app and takes a screenshot. The factory then photographs the same criteria on the base branch, so the dashboard shows each criterion before and after. Screenshots stay with the task and never go into the repository.
 - **Isolated agents.** Each agent works in its own git worktree. File tools cannot leave it, and shell commands (including the tests they run) run in Claude Code's sandbox: no reads of the rest of your home folder, and no network unless you allow a host.
@@ -90,7 +91,8 @@ The factory can check only what your repository lets it check:
 
 ```sh
 factory status | list | show <task> | events --since 0
-factory approve <task>                    # retry an escalated task
+factory add --ticket PROJ-12 --gate scoping   # stop for your sign-off after scoping
+factory approve <task>                    # retry an escalated task, or approve one at a gate
 factory changes <task> --comment "..."    # send it back with feedback
 factory stop | start | halt --reason "..."
 factory env                               # the local app: up or down, which task runs it, who waits
@@ -141,6 +143,7 @@ Close the window, then set `app.browserProfile` to that folder. The browser chec
 | `verify` | Runtime verification for React UI |
 | `policy`, `maxAttempts` | High-risk paths and size limits; failures before a task escalates |
 | `trustedAuthors` | GitHub logins whose issues and comments count as trusted; agents treat others as information only |
+| `gates` | Default sign-off for tasks that do not choose: `[]` (autonomous, the default), `"scoping"`, `"design"` |
 | `maxParallelTasks` | How many tasks run at once (default 3). One browser check at a time uses the local app; the others wait for it |
 
 Environment variables override single fields: `FACTORY_REPO`, `FACTORY_CONFIG`, `FACTORY_HOME` (default `~/.factory/<repo>`), `FACTORY_BASE`, `FACTORY_TEST`, `FACTORY_BROWSER_PROFILE`, `FACTORY_AUTOSTART=1`, `API_PORT`, and others in `server/config.ts`. The CLI uses `FACTORY_URL` and `FACTORY_ACTOR`.

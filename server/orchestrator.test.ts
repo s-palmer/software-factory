@@ -1,3 +1,4 @@
+import { afterDecision } from "../shared/lifecycle";
 // @vitest-environment node
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -452,6 +453,35 @@ describe("models per phase", () => {
 });
 
 describe("the decider", () => {
+  it("stops after design at a gate, and goes on once a person approves", async () => {
+    make({ gates: ["design"] });
+    const task = await newTask();
+    expect((await drive(task.id)).at(-1)).toBe("awaiting_approval");
+    expect((await get(task.id)).context.gateStage).toBe("design");
+    expect(await orch.nextTask()).toBeNull();
+
+    const at = await get(task.id);
+    await db.recordFeedback(at, { decision: "approve", comment: "", artifactId: null }, afterDecision(at.status, "approve", at.context.gateStage ?? null)!);
+    const after = await get(task.id);
+    expect(after.status).toBe("test_writing");
+    expect(after.context.gateStage).toBeUndefined();
+    expect((await drive(task.id)).at(-1)).toBe("done");
+  });
+
+  it("a task's own gates win over the config; changes at a gate run that stage again with the comment", async () => {
+    make({ gates: ["design"] });
+    const task = await newTask();
+    await db.updateTask(task.id, { context: { gates: ["scoping"] } });
+    expect((await drive(task.id)).at(-1)).toBe("awaiting_approval");
+    const at = await get(task.id);
+    expect(at.context.gateStage).toBe("scoping");
+
+    await db.recordFeedback(at, { decision: "request_changes", comment: "Keep the old URL", artifactId: null }, afterDecision(at.status, "request_changes", "scoping")!);
+    expect((await get(task.id)).status).toBe("scoping");
+    await orch.step(task.id);
+    expect(fakes.calls.filter((c) => c.phase === "scoping").at(-1)!.prompt).toContain("A person asked for changes: Keep the old URL");
+  });
+
   it("answers scoping questions, and design gets the answers", async () => {
     fakes.script("scoping", { ...DEFAULTS.scoping, questions: ["Paginate or scroll?"] });
     fakes.script("decider", { summary: "ok", decisions: [{ question: "Paginate or scroll?", answer: "Paginate, 10 per page", needsHuman: false }] });

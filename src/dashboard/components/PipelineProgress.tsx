@@ -32,7 +32,7 @@ export function PipelineProgress({ status, needsBrowser, compact = false }: Pipe
       <div className="pipeline pipeline--compact" {...attrs}>
         <progress value={step} max={total} aria-label={`Stage ${step} of ${total}`} />
         <span className="pipeline__caption">
-          {escalated ? "Escalated" : `${step}/${total} ${stage.label}`}
+          {escalated ? stage.label : `${step}/${total} ${stage.label}`}
           {next && !escalated && <span className="pipeline__next"> → {next.label}</span>}
         </span>
       </div>
@@ -53,7 +53,7 @@ export function PipelineProgress({ status, needsBrowser, compact = false }: Pipe
         })}
       </ol>
       <p className="pipeline__now" data-actor={stage.actor} data-escalated={escalated}>
-        <strong>{escalated ? "Escalated" : `Stage ${step} of ${total}: ${stage.label}`}</strong>. {stage.doing}.{" "}
+        <strong>{escalated ? stage.label : `Stage ${step} of ${total}: ${stage.label}`}</strong>. {stage.doing}.{" "}
         {escalated ? "Waiting for a decision." : `Waiting on ${WHO[stage.actor]}.`}
       </p>
       {next && (

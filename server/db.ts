@@ -508,6 +508,7 @@ export class FactoryDb {
         const context = mergeContext(task.context, {
           deciderUsed: [],
           escalation: undefined,
+          gateStage: undefined,
           ...(input.decision === "request_changes" ? { feedback: [`A person asked for changes: ${input.comment}`] } : {}),
         });
         await this.exec("UPDATE tasks SET status = $1, attempts = 0, context = $2, updated_at = now() WHERE id = $3", [nextStatus, JSON.stringify(context), task.id]);

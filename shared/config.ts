@@ -157,6 +157,11 @@ export const ProjectConfig = z.object({
   maxAttempts: z.number().int().positive().default(3),
   /** GitHub logins whose issues and comments the agents may treat as trusted. Others are marked as information only. */
   trustedAuthors: z.array(z.string().min(1)).default([]),
+  /**
+   * Stop for a person's approval after these stages: "scoping" (the solution doc) and "design" (the task list). Empty
+   * by default: the factory runs on its own. A task can set its own (factory add --gate design).
+   */
+  gates: z.array(z.enum(["scoping", "design"])).default([]),
   /** How many tasks the factory works on at once. The local app is still used by one browser check at a time. */
   maxParallelTasks: z.number().int().min(1).max(20).default(3),
   policy: RiskPolicy.default(DEFAULT_POLICY),

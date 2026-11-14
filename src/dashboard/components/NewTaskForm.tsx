@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { CreateTaskInput, TrackerInfo } from "../../../shared/api";
+import type { Gate } from "../../../shared/lifecycle";
 import { verifyAttrs } from "../../verify/core/contract";
 
 export interface NewTaskFormProps {
@@ -11,6 +12,14 @@ export interface NewTaskFormProps {
 }
 
 const GITHUB: TrackerInfo = { type: "github" };
+
+/** How much a person signs off. Autonomous is the default: the factory runs from ticket to pull request on its own. */
+export const SIGN_OFF: ReadonlyArray<{ id: string; label: string; gates: Gate[] }> = [
+  { id: "none", label: "Autonomous", gates: [] },
+  { id: "scoping", label: "Sign off the solution", gates: ["scoping"] },
+  { id: "design", label: "Sign off the task list", gates: ["design"] },
+  { id: "both", label: "Sign off both", gates: ["scoping", "design"] },
+];
 
 /** "12", "#12" or " 12 " → "#12". Anything else → null. */
 export function parseIssue(text: string): string | null {
@@ -48,6 +57,7 @@ export function NewTaskForm({ onCreate, error, tracker = GITHUB }: NewTaskFormPr
   const [issue, setIssue] = useState("");
   const [blockers, setBlockers] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [signOff, setSignOff] = useState("none");
 
   const ticketKey = parseKey(issue, tracker);
   const blockedBy = parseBlockers(blockers, tracker);
@@ -61,9 +71,10 @@ export function NewTaskForm({ onCreate, error, tracker = GITHUB }: NewTaskFormPr
     if (!canSubmit || !ticketKey || !blockedBy) return;
     setSubmitting(true);
     try {
-      await onCreate({ ticketKey, blockedBy });
+      await onCreate({ ticketKey, blockedBy, gates: SIGN_OFF.find((s) => s.id === signOff)?.gates ?? [] });
       setIssue("");
       setBlockers("");
+      setSignOff("none");
     } catch {
       // The parent surfaces the error via the `error` prop; keep the user's input.
     } finally {
@@ -84,6 +95,7 @@ export function NewTaskForm({ onCreate, error, tracker = GITHUB }: NewTaskFormPr
         issue: ticketKey ?? "",
         "blocked-by": blockedBy?.join(" ") ?? "",
         invalid: Boolean(issueError || blockersError),
+        "sign-off": signOff,
       })}
     >
       <h2>New task</h2>
@@ -118,7 +130,16 @@ export function NewTaskForm({ onCreate, error, tracker = GITHUB }: NewTaskFormPr
           {blockersError}
         </p>
       )}
-      <p className="hint">The factory reads the title and details from the {noun}.</p>
+      <fieldset className="sign-off">
+        <legend>Sign-off</legend>
+        {SIGN_OFF.map((s) => (
+          <label key={s.id} className="sign-off__option">
+            <input type="radio" name="task-sign-off" id={`sign-off-${s.id}`} value={s.id} checked={signOff === s.id} onChange={() => setSignOff(s.id)} />
+            {s.label}
+          </label>
+        ))}
+      </fieldset>
+      <p className="hint">The factory reads the title and details from the {noun}. With a sign-off, the task stops for your approval after that stage.</p>
       {error && (
         <p role="alert" className="error">
           {error}

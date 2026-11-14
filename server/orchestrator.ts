@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
 import type { Task, TaskContext, TaskDetail } from "../shared/api";
-import { afterFailure, afterSuccess, FACTORY_STAGES, type TaskStatus } from "../shared/lifecycle";
+import { afterFailure, afterSuccess, FACTORY_STAGES, type Gate, type TaskStatus } from "../shared/lifecycle";
 import { modelFor, type Phase } from "../shared/models";
 import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
@@ -125,6 +125,8 @@ export interface OrchestratorConfig {
   verify?: VerifyContext | undefined;
   /** GitHub logins whose issues and comments count as trusted. */
   trustedAuthors?: string[] | undefined;
+  /** Stages after which a task stops for a person's approval, unless the task sets its own. */
+  gates?: Gate[] | undefined;
   /** How many tasks the loop works on at once. Default 1. */
   maxParallel?: number | undefined;
   /** The branch PRs target, named in the review and PR prompts (default "main"). */
@@ -273,6 +275,14 @@ export class Orchestrator {
     await this.db.addLearnings(detail.task.id, learnings);
   }
 
+  /** After scoping or design: on to the next stage, or, when the task has that gate, stop for a person's approval. */
+  private async moveOrStop(task: Task, stage: Gate): Promise<void> {
+    const gates = task.context.gates ?? this.config.gates ?? [];
+    if (!gates.includes(stage)) return this.move(task, afterSuccess(stage));
+    await this.db.updateTask(task.id, { context: { gateStage: stage } });
+    await this.move(task, "awaiting_approval");
+  }
+
   private async move(task: Task, to: TaskStatus): Promise<void> {
     await this.db.moveTask(task.id, task.status, to, "factory");
   }
@@ -402,7 +412,7 @@ export class Orchestrator {
           ...(title && task.title === task.ticketKey ? { title } : {}),
           context: { needsBrowser: Boolean(output.needsBrowser), questions: [], feedback: questions.length ? (await this.db.getTask(task.id))!.context.feedback : [] },
         });
-        return this.move(task, afterSuccess("scoping"));
+        return this.moveOrStop(task, "scoping");
       }
       case "design":
         await this.db.updateTask(task.id, {
@@ -413,7 +423,7 @@ export class Orchestrator {
             feedback: [],
           },
         });
-        return this.move(task, afterSuccess("design"));
+        return this.moveOrStop(task, "design");
       case "test_writing":
         return this.checkTests(task, output);
       case "implementing":

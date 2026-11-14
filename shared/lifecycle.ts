@@ -2,8 +2,9 @@
  * Task lifecycle shared by the server, the CLI and the dashboard.
  *
  * The factory runs on its own: every stage is an agent or the factory itself. It never merges: it opens a PR,
- * keeps it green, marks it ready, and a merge agent (or a person) merges it. The only stop is `escalated`,
- * where a person or an orchestrator agent (through the CLI) decides. Pure: no I/O.
+ * keeps it green, marks it ready, and a merge agent (or a person) merges it. It stops in `escalated`, where a person
+ * or an orchestrator agent (through the CLI) decides, and, when a gate is on, in `awaiting_approval` after scoping
+ * or design, where only a person decides. Pure: no I/O.
  */
 export const TASK_STATUSES = [
   "backlog",
@@ -17,6 +18,7 @@ export const TASK_STATUSES = [
   "awaiting_merge",
   "done",
   "escalated",
+  "awaiting_approval",
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -34,7 +36,11 @@ export const FACTORY_STAGES: ReadonlySet<TaskStatus> = new Set([
 ]);
 
 /** Statuses where the pipeline waits for a decision. */
-export const AWAITING_HUMAN: ReadonlySet<TaskStatus> = new Set(["escalated"]);
+export const AWAITING_HUMAN: ReadonlySet<TaskStatus> = new Set(["escalated", "awaiting_approval"]);
+
+/** Stages after which a task can stop for a person's approval (`gates` in the config, or per task). */
+export const GATES = ["scoping", "design"] as const;
+export type Gate = (typeof GATES)[number];
 
 /** Stages in which the task's worktree holds code changes. */
 const CODE_STAGES: ReadonlySet<TaskStatus> = new Set(["implementing", "reviewing", "browser_check", "pr", "awaiting_merge"]);
@@ -66,6 +72,7 @@ export function afterSuccess(stage: TaskStatus, opts: { needsBrowser?: boolean }
       return "done";
     case "done":
     case "escalated":
+    case "awaiting_approval":
       return stage;
   }
 }
@@ -92,13 +99,19 @@ export function afterFailure(stage: TaskStatus, attempts: number, maxAttempts: n
 export type Decision = "approve" | "request_changes" | "comment";
 
 /**
- * Where a decision sends a task. `null`: not allowed (only escalated tasks take approve or request changes).
- * Approve retries the stage that escalated. Request changes goes to implement when code exists
- *, else back to the stage that escalated, with the comment as feedback.
+ * Where a decision sends a task. `null`: not allowed (only escalated tasks and tasks at a gate take approve or
+ * request changes). At a gate (`from` is the stage it stopped after), approve goes on to the next stage and request
+ * changes runs that stage again. For an escalated task (`from` is the stage that escalated), approve retries it, and
+ * request changes goes to implement when code exists, else back to that stage, with the comment as feedback.
  */
-export function afterDecision(status: TaskStatus, decision: Decision, escalatedFrom: TaskStatus | null): TaskStatus | null {
+export function afterDecision(status: TaskStatus, decision: Decision, from: TaskStatus | null): TaskStatus | null {
   if (decision === "comment") return status;
+  if (status === "awaiting_approval") {
+    if (!from || !(GATES as readonly string[]).includes(from)) return null;
+    return decision === "approve" ? afterSuccess(from) : from;
+  }
   if (status !== "escalated") return null;
+  const escalatedFrom = from;
   const retry = escalatedFrom && FACTORY_STAGES.has(escalatedFrom) ? escalatedFrom : "backlog";
   if (decision === "approve") return retry;
   return CODE_STAGES.has(retry) ? "implementing" : retry;
@@ -146,13 +159,20 @@ export const ESCALATED_STAGE: Stage = {
   doing: "Stopped by retries, budget or risk. Retry the stage or request changes",
 };
 
+export const APPROVAL_STAGE: Stage = {
+  status: "awaiting_approval",
+  label: "Waiting for approval",
+  actor: "system",
+  doing: "Stopped at a gate. Read the doc, then approve it or request changes",
+};
+
 /** The pipeline as a task sees it: the browser check is left out when the change is known not to be visible. */
 export function pipelineFor(opts: { needsBrowser?: boolean; current?: TaskStatus } = {}): Stage[] {
   return PIPELINE.filter((s) => s.status !== "browser_check" || opts.needsBrowser !== false || opts.current === "browser_check");
 }
 
 export interface PipelinePosition {
-  /** 0-based index in the pipeline, or -1 when escalated. */
+  /** 0-based index in the pipeline, or -1 when the task waits for a person (escalated or at a gate). */
   index: number;
   total: number;
   stage: Stage;
@@ -162,6 +182,6 @@ export interface PipelinePosition {
 export function pipelinePosition(status: TaskStatus, opts: { needsBrowser?: boolean } = {}): PipelinePosition {
   const stages = pipelineFor({ ...opts, current: status });
   const index = stages.findIndex((s) => s.status === status);
-  if (index === -1) return { index: -1, total: stages.length, stage: ESCALATED_STAGE, next: null };
+  if (index === -1) return { index: -1, total: stages.length, stage: status === "awaiting_approval" ? APPROVAL_STAGE : ESCALATED_STAGE, next: null };
   return { index, total: stages.length, stage: stages[index]!, next: stages[index + 1] ?? null };
 }

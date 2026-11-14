@@ -42,12 +42,24 @@ export function TaskPage({ id }: { id: string }) {
   const [defaults, setDefaults] = useState<PhaseModels>(DEFAULT_PHASE_MODELS);
   const [stepping, setStepping] = useState(false);
   const [stepNote, setStepNote] = useState<string | null>(null);
+  const [loadedDoc, setLoadedDoc] = useState<{ key: string; doc: { path: string; text: string | null } } | null>(null);
 
   const load = useCallback(() => {
     api.getTask(id).then(setDetail, (err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
     api.listTasks().then(setAllTasks, () => setAllTasks([]));
   }, [id]);
   useEffect(load, [load]);
+  // At a gate, load the doc the stage wrote: the solution doc after scoping, the task list after design.
+  const gateStage = detail?.task.status === "awaiting_approval" ? detail.task.context.gateStage : undefined;
+  const docKey = gateStage ? `${id}:${gateStage}` : null;
+  useEffect(() => {
+    if (!docKey) return;
+    api.getDocs(id).then(
+      (docs) => setLoadedDoc({ key: docKey, doc: gateStage === "design" ? docs.tasks : docs.solution }),
+      () => setLoadedDoc({ key: docKey, doc: { path: "the doc", text: null } }),
+    );
+  }, [id, docKey, gateStage]);
+  const gateDoc = loadedDoc && loadedDoc.key === docKey ? loadedDoc.doc : null;
   useEffect(() => {
     // If the defaults can't be loaded, show the built-in ones.
     api.getDefaultModels().then((d) => setDefaults(d.phaseModels), () => setDefaults(DEFAULT_PHASE_MODELS));
@@ -162,7 +174,7 @@ export function TaskPage({ id }: { id: string }) {
           <AgentRunList runs={agentRuns} />
         </div>
         <aside>
-          <FeedbackPanel status={task.status} context={task.context} artifacts={artifacts} selectedArtifactId={selected} onSubmit={sendFeedback} error={feedbackError} />
+          <FeedbackPanel status={task.status} context={task.context} gateDoc={gateDoc} artifacts={artifacts} selectedArtifactId={selected} onSubmit={sendFeedback} error={feedbackError} />
           <section className="models-panel">
             <ModelPicker defaults={defaults} overrides={overrides} onChange={changeModel} disabled={pendingOverrides !== null || task.status === "done"} idPrefix="task-model" />
             {modelsError && <p role="alert" className="error">{modelsError}</p>}
