@@ -122,6 +122,8 @@ export interface Task extends TaskSummary {
   branch: string | null;
   worktree: string | null;
   prNumber: number | null;
+  /** The pull request's web address, when the server knows the repository's GitHub address. */
+  prUrl?: string | null;
   context: TaskContext;
   createdAt: string;
 }
@@ -204,14 +206,42 @@ export interface TaskDetail {
   events: TaskEvent[];
 }
 
+/**
+ * A lesson the retro proposed after a task ended. "factory": a rule for how the stages work, applied to the
+ * learnings file every later run reads. "codebase": a rule for the repository's own instructions (`target`, such as
+ * CLAUDE.md), applied as a new factory task, so it reaches the repository through a pull request.
+ */
 export interface Learning {
   id: string;
   sourceTaskId: string;
   source: string;
+  kind: LearningKind;
   summary: string;
-  status: string;
+  /** For a codebase learning, the file it belongs in. */
+  target: string | null;
+  /** What happened in the task that shows the lesson. */
+  evidence: string[];
+  status: LearningStatus;
+  /** "learnings file" or "task:<id>", once applied. */
+  appliedTo: string | null;
+  appliedAt: string | null;
   createdAt: string;
 }
+
+export const LEARNING_KINDS = ["factory", "codebase"] as const;
+export type LearningKind = (typeof LEARNING_KINDS)[number];
+export type LearningStatus = "open" | "approved" | "rejected";
+
+/** A person's edit or decision on a proposed learning. */
+export const UpdateLearningInput = z
+  .object({
+    summary: z.string().trim().min(1).max(1000).optional(),
+    kind: z.enum(LEARNING_KINDS).optional(),
+    target: z.string().trim().min(1).max(200).nullable().optional(),
+    status: z.enum(["open", "approved", "rejected"]).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to change" });
+export type UpdateLearningInput = z.infer<typeof UpdateLearningInput>;
 
 /* ---------------------------- Browser test runs ---------------------------- */
 

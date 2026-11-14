@@ -227,3 +227,21 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 .evidence__shot button { font-size: 12px; }
 .evidence__note { margin: 8px 0 0; font-size: 13px; }
 
+/* ---- Learnings ---- */
+.learnings { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 2px rgb(0 0 0 / 0.1); max-width: 900px; }
+.learnings h2 { margin: 0 0 8px; font-size: 18px; }
+.learnings h3 { margin: 16px 0 6px; font-size: 15px; }
+.learnings__list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.learnings__proposed { border-top: 1px solid #eee; padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.learnings__proposed textarea, .learnings__proposed input[type="text"] { width: 100%; box-sizing: border-box; }
+.learnings__fields { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; }
+.learnings__actions, .learnings__apply-head { display: flex; gap: 8px; align-items: center; }
+.learnings__apply-head h3 { margin-right: auto; }
+.learnings__kind { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #eef1f5; color: #333; }
+.learnings__approve:not(:disabled) { background: #1a7f37; color: #fff; border-color: #1a7f37; }
+.learnings__message { margin: 8px 0; }
+
+/* A link that looks like a button. */
+a.button { display: inline-block; padding: 4px 12px; border: 1px solid #0b5cad; border-radius: 6px; background: #0b5cad; color: #fff; text-decoration: none; font-size: 14px; }
+a.button:hover { background: #094a8c; }
+

@@ -2,7 +2,7 @@
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { Hono } from "hono";
-import { ArtifactInput, CreateTaskInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, type RunDetail } from "../shared/api";
+import { ArtifactInput, CreateTaskInput, UpdateLearningInput, FeedbackInput, SetDefaultModelsInput, SetModelsInput, StartPlanInput, StartRunInput, type RunDetail } from "../shared/api";
 import { ACTOR_HEADER, ActorSchema, isAgent, type Actor } from "../shared/actor";
 import type { RiskPolicy } from "../shared/risk";
 import { afterDecision, statusLabel } from "../shared/lifecycle";
@@ -14,12 +14,24 @@ import { RunBusyError, type TestRunner } from "./runner";
 /** `orchestrator` is optional: without it the API still serves tasks, and the loop routes answer 503. */
 import { normalizeTicketKey, type TrackerConfig } from "../shared/config";
 import type { LocalEnv } from "./environment";
+import { applyLearnings } from "./learnings";
 
 export function createApp(
   db: FactoryDb,
-  opts: { runner?: TestRunner; policy?: RiskPolicy; orchestrator?: Orchestrator; planner?: Planner; tracker?: TrackerConfig; env?: LocalEnv; artifactRoot?: string } = {},
+  opts: {
+    runner?: TestRunner;
+    policy?: RiskPolicy;
+    orchestrator?: Orchestrator;
+    planner?: Planner;
+    tracker?: TrackerConfig;
+    env?: LocalEnv;
+    artifactRoot?: string;
+    learningsFile?: string;
+    /** The repository's GitHub address, so a task links to its pull request. */
+    repoWebUrl?: string | null;
+  } = {},
 ) {
-  const { runner, policy, orchestrator, planner, env, artifactRoot } = opts;
+  const { runner, policy, orchestrator, planner, env, artifactRoot, learningsFile, repoWebUrl } = opts;
   const tracker = opts.tracker ?? { type: "github" as const };
   const app = new Hono<{ Variables: { actor: Actor } }>();
 
@@ -61,7 +73,9 @@ export function createApp(
 
   app.get("/api/tasks/:id", async (c) => {
     const detail = await db.getTaskDetail(c.req.param("id"));
-    return detail ? c.json(detail) : c.json({ error: "Task not found" }, 404);
+    if (!detail) return c.json({ error: "Task not found" }, 404);
+    const prUrl = repoWebUrl && detail.task.prNumber !== null ? `${repoWebUrl}/pull/${detail.task.prNumber}` : null;
+    return c.json({ ...detail, task: { ...detail.task, prUrl } });
   });
 
   /** The factory's default model for each phase (shared/models.ts). */
@@ -275,6 +289,28 @@ export function createApp(
   });
 
   app.get("/api/learnings", async (c) => c.json(await db.listLearnings()));
+
+  /** A person edits a proposed learning, or approves or rejects it. Agents may not decide what every run reads. */
+  app.patch("/api/learnings/:id", async (c) => {
+    const actor = c.get("actor");
+    if (isAgent(actor)) return c.json({ error: `${actor} may not change learnings; only a person can` }, 403);
+    const parsed = UpdateLearningInput.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
+    try {
+      const learning = await db.updateLearning(c.req.param("id"), parsed.data, actor);
+      return learning ? c.json(learning) : c.json({ error: "Learning not found" }, 404);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 409);
+    }
+  });
+
+  /** Applies every approved learning: factory ones to the learnings file, codebase ones as new tasks. */
+  app.post("/api/learnings/apply", async (c) => {
+    const actor = c.get("actor");
+    if (isAgent(actor)) return c.json({ error: `${actor} may not apply learnings; only a person can` }, 403);
+    if (!learningsFile) return c.json({ error: "No learnings file is configured on this server" }, 503);
+    return c.json(await applyLearnings(db, learningsFile, actor));
+  });
 
   return app;
 }

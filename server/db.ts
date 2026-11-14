@@ -12,6 +12,8 @@ import type {
   ArtifactInput,
   Feedback,
   Learning,
+  LearningKind,
+  UpdateLearningInput,
   RunStatus,
   RunSummary,
   Task,
@@ -179,6 +181,8 @@ CREATE TABLE IF NOT EXISTS learnings (
   promoted_to VARCHAR,
   created_at TIMESTAMP NOT NULL DEFAULT now()
 );
+ALTER TABLE learnings ADD COLUMN IF NOT EXISTS target VARCHAR;
+ALTER TABLE learnings ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP;
 `;
 
 type Row = Record<string, unknown>;
@@ -678,15 +682,61 @@ export class FactoryDb {
   }
 
   async listLearnings(): Promise<Learning[]> {
-    const rows = await this.all("SELECT * REPLACE (strftime(created_at, '%Y-%m-%dT%H:%M:%S') AS created_at) FROM learnings ORDER BY created_at DESC");
-    return rows.map((r) => ({
-      id: String(r.id),
-      sourceTaskId: String(r.source_task_id),
-      source: String(r.source),
-      summary: String(r.summary),
-      status: String(r.status),
-      createdAt: String(r.created_at),
-    }));
+    const rows = await this.all(`SELECT * REPLACE (strftime(created_at, '%Y-%m-%dT%H:%M:%S') AS created_at, strftime(applied_at, '%Y-%m-%dT%H:%M:%S') AS applied_at)
+      FROM learnings ORDER BY created_at DESC, id`);
+    return rows.map(toLearning);
+  }
+
+  async getLearning(id: string): Promise<Learning | null> {
+    const [row] = await this.all(
+      "SELECT * REPLACE (strftime(created_at, '%Y-%m-%dT%H:%M:%S') AS created_at, strftime(applied_at, '%Y-%m-%dT%H:%M:%S') AS applied_at) FROM learnings WHERE id = $1",
+      [id],
+    );
+    return row ? toLearning(row) : null;
+  }
+
+  /** The retro's proposals for a task, open until a person decides. */
+  async addLearnings(taskId: string, items: Array<{ kind: LearningKind; summary: string; target: string | null; evidence: string[] }>): Promise<Learning[]> {
+    const ids: string[] = [];
+    await this.tx(async () => {
+      for (const l of items) {
+        const id = crypto.randomUUID();
+        ids.push(id);
+        await this.exec("INSERT INTO learnings (id, source_task_id, source, category, summary, target, evidence) VALUES ($1, $2, 'retro', $3, $4, $5, $6)", [
+          id,
+          taskId,
+          l.kind,
+          l.summary,
+          l.target,
+          JSON.stringify(l.evidence),
+        ]);
+      }
+      if (items.length) await this.event(taskId, "learnings_proposed", { count: items.length, ids });
+    });
+    return Promise.all(ids.map(async (id) => (await this.getLearning(id))!));
+  }
+
+  /** A person edits a learning, or approves or rejects it. An applied learning does not change. */
+  async updateLearning(id: string, change: UpdateLearningInput, by = "human"): Promise<Learning | null> {
+    const current = await this.getLearning(id);
+    if (!current) return null;
+    if (current.appliedAt) throw new Error("This learning is already applied");
+    const next = { ...current, ...change };
+    await this.tx(async () => {
+      await this.exec("UPDATE learnings SET summary = $1, category = $2, target = $3, status = $4 WHERE id = $5", [
+        next.summary,
+        next.kind,
+        next.kind === "codebase" ? (next.target ?? "CLAUDE.md") : null,
+        next.status,
+        id,
+      ]);
+      await this.event(current.sourceTaskId, "learning_updated", { learningId: id, ...change, by });
+    });
+    return this.getLearning(id);
+  }
+
+  async markLearningApplied(id: string, appliedTo: string): Promise<void> {
+    await this.exec("UPDATE learnings SET promoted_to = $1, applied_at = now() WHERE id = $2", [appliedTo, id]);
   }
 }
 
@@ -826,3 +876,21 @@ function parseJson(value: unknown): Record<string, unknown> {
     return {};
   }
 }
+
+function toLearning(r: Row): Learning {
+  const evidence = typeof r.evidence === "string" ? (JSON.parse(r.evidence) as unknown) : r.evidence;
+  return {
+    id: String(r.id),
+    sourceTaskId: String(r.source_task_id),
+    source: String(r.source),
+    kind: r.category === "codebase" ? "codebase" : "factory",
+    summary: String(r.summary),
+    target: r.target == null ? null : String(r.target),
+    evidence: Array.isArray(evidence) ? evidence.map(String) : [],
+    status: (["open", "approved", "rejected"].includes(String(r.status)) ? String(r.status) : "open") as Learning["status"],
+    appliedTo: r.promoted_to == null ? null : String(r.promoted_to),
+    appliedAt: r.applied_at == null ? null : String(r.applied_at),
+    createdAt: String(r.created_at),
+  };
+}
+

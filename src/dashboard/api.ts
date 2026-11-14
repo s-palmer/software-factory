@@ -1,4 +1,4 @@
-import type { Artifact, CreateTaskInput, DefaultModels, EnvStatus, TrackerInfo, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
+import type { Artifact, CreateTaskInput, Learning, UpdateLearningInput, DefaultModels, EnvStatus, TrackerInfo, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
 import type { RiskPolicy } from "../../shared/risk";
 
 /** The orchestrator loop. `available: false` when the server runs without one (e.g. tests). */
@@ -42,6 +42,9 @@ export const api = {
   getPolicy: () => request<RiskPolicy>("/api/policy"),
   getEnv: () => request<EnvStatus>("/api/env"),
   getTracker: () => request<TrackerInfo>("/api/tracker"),
+  listLearnings: () => request<Learning[]>("/api/learnings"),
+  updateLearning: (id: string, change: UpdateLearningInput) => request<Learning>(`/api/learnings/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(change) }),
+  applyLearnings: () => request<{ factory: number; tasks: Array<{ learningId: string; taskId: string }> }>("/api/learnings/apply", { method: "POST" }),
   removeArtifact: (id: string) => request<Artifact>(`/api/artifacts/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // A refused start or stop (409) still carries a message for the page.
   startEnv: () => envAction("start"),

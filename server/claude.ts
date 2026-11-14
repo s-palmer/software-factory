@@ -38,6 +38,8 @@ export const HeadlessPrompt = fileURLToPath(new URL("../prompts/headless.md", im
 /** Approved learnings from earlier tasks. Every run reads them after the fixed rules. */
 export const LearningsFile = fileURLToPath(new URL("../prompts/learnings.md", import.meta.url));
 
+const readIfExists = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+
 export function systemPromptText(rules: string, learnings: string): string {
   if (!learnings.trim()) return rules;
   return `${rules}\n\n## Learnings from earlier tasks\n\n${learnings}`;
@@ -106,6 +108,8 @@ export type RunOptions = {
   /** The agent runtime command; tests pass a fake that writes a real stream log. */
   command?: string[] | undefined;
   env?: Record<string, string> | undefined;
+  /** The approved learnings for this repository. Default: the factory's own prompts/learnings.md. */
+  learningsFile?: string | undefined;
 };
 
 export function runClaude(call: ClaudeCall, options: RunOptions): Promise<ClaudeResult> {
@@ -122,7 +126,7 @@ export function runClaude(call: ClaudeCall, options: RunOptions): Promise<Claude
   const systemPrompt = join(options.runDir, "system-prompt.md");
   writeFileSync(
     systemPrompt,
-    systemPromptText(readFileSync(HeadlessPrompt, "utf8"), existsSync(LearningsFile) ? readFileSync(LearningsFile, "utf8") : ""),
+    systemPromptText(readFileSync(HeadlessPrompt, "utf8"), readIfExists(options.learningsFile ?? LearningsFile)),
   );
   const [bin = "claude", ...prefix] = options.command ?? ["claude"];
   const args = [...prefix, ...buildClaudeArgs(call, { mcpConfig, settings, systemPrompt })];

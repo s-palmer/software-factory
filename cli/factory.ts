@@ -419,12 +419,42 @@ export const COMMANDS: Record<string, Command> = {
   },
   learnings: {
     usage: "learnings",
-    summary: "Proposed and approved learnings",
+    summary: "The retro's learnings: proposed, approved and applied",
     args: 0,
     run: async ({ api }) => {
       const learnings = await api<Learning[]>("GET", "/api/learnings");
-      const text = learnings.length ? learnings.map((l) => `${l.id}  ${l.status}  ${l.summary}`).join("\n") : "No learnings.";
+      const state = (l: Learning) => (l.appliedAt ? `applied (${l.appliedTo})` : l.status);
+      const text = learnings.length
+        ? table([["ID", "KIND", "STATE", "LEARNING"], ...learnings.map((l) => [l.id.slice(0, 8), l.kind === "codebase" ? `codebase: ${l.target}` : "factory", state(l), l.summary.slice(0, 90)])])
+        : "No learnings.";
       return { data: learnings, text };
+    },
+  },
+  "learning-approve": {
+    usage: "learning-approve <learning>",
+    summary: "Approve a proposed learning (a person only)",
+    args: 1,
+    run: async ({ api, args }) => {
+      const l = await api<Learning>("PATCH", `/api/learnings/${enc(await learningId(api, args[0]!))}`, { status: "approved" });
+      return { data: l, text: `approved: ${l.summary}` };
+    },
+  },
+  "learning-reject": {
+    usage: "learning-reject <learning>",
+    summary: "Reject a proposed learning (a person only)",
+    args: 1,
+    run: async ({ api, args }) => {
+      const l = await api<Learning>("PATCH", `/api/learnings/${enc(await learningId(api, args[0]!))}`, { status: "rejected" });
+      return { data: l, text: `rejected: ${l.summary}` };
+    },
+  },
+  "learnings-apply": {
+    usage: "learnings-apply",
+    summary: "Apply approved learnings: factory ones to the learnings file, codebase ones as new tasks (a person only)",
+    args: 0,
+    run: async ({ api }) => {
+      const r = await api<{ factory: number; tasks: Array<{ learningId: string; taskId: string }> }>("POST", "/api/learnings/apply");
+      return { data: r, text: `${r.factory} added to the learnings file; ${r.tasks.length} task(s) created${r.tasks.length ? `: ${r.tasks.map((t) => t.taskId).join(", ")}` : ""}` };
     },
   },
   env: {
@@ -477,6 +507,13 @@ export const COMMANDS: Record<string, Command> = {
     },
   },
 };
+
+/** A learning by its full id or the first characters of it, as `factory learnings` shows. */
+async function learningId(api: Api, given: string): Promise<string> {
+  const matches = (await api<Learning[]>("GET", "/api/learnings")).filter((l) => l.id.startsWith(given));
+  if (matches.length !== 1) throw new CliError(matches.length ? EXIT.invalid : EXIT.notFound, matches.length ? `"${given}" matches ${matches.length} learnings` : `No learning "${given}"`);
+  return matches[0]!.id;
+}
 
 export function helpText(): string {
   const rows = Object.values(COMMANDS).map((c) => [`  factory ${c.usage}`, c.summary]);

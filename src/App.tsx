@@ -1,5 +1,6 @@
 import { EnvPage } from "./dashboard/pages/EnvPage";
 import { HomePage } from "./dashboard/pages/HomePage";
+import { LearningsPage } from "./dashboard/pages/LearningsPage";
 import { ModelsPage } from "./dashboard/pages/ModelsPage";
 import { RunPage } from "./dashboard/pages/RunPage";
 import { RunsPage } from "./dashboard/pages/RunsPage";
@@ -11,6 +12,7 @@ function route([section, id]: string[]) {
   if (section === "tasks" && id) return <TaskPage id={id} />;
   if (section === "models") return <ModelsPage />;
   if (section === "env") return <EnvPage />;
+  if (section === "learnings") return <LearningsPage />;
   if (section === "runs") return id ? <RunPage id={id} /> : <RunsPage />;
   return <HomePage />;
 }
@@ -29,6 +31,7 @@ export function App() {
         <a href="/" className="topbar__brand">Simple Software Factory</a>
         <a href="/">Tasks</a>
         <a href="/env">Environment</a>
+        <a href="/learnings">Learnings</a>
         <a href="/models">Models</a>
       </nav>
       <main>{route(parts)}</main>

@@ -28,6 +28,8 @@ export interface EffectsConfig {
   /** Where task worktrees and the base worktree live (outside the repository). */
   home: string;
   claudeCommand: string[];
+  /** The approved learnings every run reads, per repository. */
+  learningsFile?: string;
   installCommand: string[];
   /** Install after a change to package.json or the lockfile; agents may not install packages themselves. */
   syncCommand: string[];
@@ -290,7 +292,7 @@ export function createEffects(config: EffectsConfig): Effects {
   };
 
   return {
-    claude: (call, opts) => runClaude(call, { cwd: opts.cwd, runDir: opts.runDir, env: opts.env, command: config.claudeCommand }),
+    claude: (call, opts) => runClaude(call, { cwd: opts.cwd, runDir: opts.runDir, env: opts.env, command: config.claudeCommand, learningsFile: config.learningsFile }),
 
     async createWorktree(task: Task) {
       const key = task.ticketKey?.replace(/^#/, "issue-").replace(/[^A-Za-z0-9-]+/g, "-").toLowerCase();

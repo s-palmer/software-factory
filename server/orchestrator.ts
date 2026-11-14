@@ -7,13 +7,14 @@
  */
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative } from "node:path";
-import type { Task, TaskContext } from "../shared/api";
+import type { Task, TaskContext, TaskDetail } from "../shared/api";
 import { afterFailure, afterSuccess, FACTORY_STAGES, type TaskStatus } from "../shared/lifecycle";
 import { modelFor, type Phase } from "../shared/models";
 import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
 import type { FactoryDb } from "./db";
 import { runIsolation, type IsolationConfig } from "./isolation";
+import { retroCall, type RetroOutput } from "./retro";
 import { beforeCaptureCall, deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules, type VerifyContext } from "./phases";
 
 export interface GateStep {
@@ -172,6 +173,8 @@ export class Orchestrator {
     if (await this.db.getHalt()) return false;
     this.ticking = true;
     try {
+      // A retro runs beside the loop, one at a time, so it never holds up a task.
+      if (!this.retroRunning) void this.retroNext();
       const id = await this.nextTask();
       if (!id) return false;
       await this.step(id);
@@ -203,6 +206,54 @@ export class Orchestrator {
 
   private now(): Date {
     return this.config.now?.() ?? new Date();
+  }
+
+  private retroRunning = false;
+
+  /** What a retro covers: the task's end state. A task that escalates again for another reason gets another retro. */
+  private retroKey(task: Task): string | null {
+    if (task.status === "done") return "done";
+    if (task.status === "escalated") return `escalated:${task.context.escalatedFrom ?? ""}:${task.context.escalation ?? ""}`.slice(0, 300);
+    return null;
+  }
+
+  /** Runs the retro of one ended task that has not had one for its end state. Returns whether it ran one. */
+  async retroNext(): Promise<boolean> {
+    if (this.retroRunning) return false;
+    this.retroRunning = true;
+    try {
+      for (const summary of await this.db.listTasks()) {
+        if (summary.status !== "done" && summary.status !== "escalated") continue;
+        const detail = await this.db.getTaskDetail(summary.id);
+        if (!detail?.task.worktree) continue;
+        const key = this.retroKey(detail.task);
+        if (!key || detail.events.some((e) => e.type === "retro_done" && e.payload.key === key)) continue;
+        await this.retro(detail, key);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("[factory] retro failed:", error);
+      return false;
+    } finally {
+      this.retroRunning = false;
+    }
+  }
+
+  private async retro(detail: TaskDetail, key: string): Promise<void> {
+    // Recorded first, so a retro that fails is not tried again and again.
+    await this.db.recordEvent(detail.task.id, "retro_done", { key });
+    const result = await this.runAgent(detail.task, "retro", { phase: "retro", kind: "retro", build: (ctx) => retroCall(detail, ctx) });
+    if (!result.ok) return;
+    const output = result.output as RetroOutput | null;
+    const learnings = (output?.learnings ?? []).slice(0, 3).flatMap((l) => {
+      const summary = String(l.summary ?? "").trim();
+      if (!summary) return [];
+      const kind = l.kind === "codebase" ? ("codebase" as const) : ("factory" as const);
+      const target = kind === "codebase" ? String(l.target ?? "").trim() || "CLAUDE.md" : null;
+      return [{ kind, summary, target, evidence: (l.evidence ?? []).map(String).slice(0, 5) }];
+    });
+    await this.db.addLearnings(detail.task.id, learnings);
   }
 
   private async move(task: Task, to: TaskStatus): Promise<void> {
@@ -255,12 +306,13 @@ export class Orchestrator {
 
   private async runAgent(
     task: Task,
-    stage: AgentStage,
+    stage: AgentStage | "retro",
     opts: { phase?: Phase; kind?: string; browserUrl?: string; build?: (ctx: PhaseContext) => ClaudeCall } = {},
   ): Promise<ClaudeResult & { runId: string; screenshotDir: string }> {
     const phase = opts.phase ?? stage;
     const model = modelFor(phase, await this.db.getDefaultModels(), task.phaseModels);
-    const run = await this.db.startAgentRun(task.id, stage, opts.kind ?? "agent", model);
+    // A retro is recorded under the stage the task ended in, with kind "retro".
+    const run = await this.db.startAgentRun(task.id, stage === "retro" ? task.status : stage, opts.kind ?? "agent", model);
     const runDir = this.runDir(task, run.id);
     mkdirSync(runDir, { recursive: true });
     const screenshotDir = join(runDir, "screenshots");
@@ -291,7 +343,7 @@ export class Orchestrator {
     };
     let result: ClaudeResult;
     try {
-      result = await this.effects.claude(opts.build ? opts.build(ctx) : phaseCall(stage, task, ctx), { cwd: task.worktree ?? ".", runDir });
+      result = await this.effects.claude(opts.build ? opts.build(ctx) : phaseCall(stage as AgentStage, task, ctx), { cwd: task.worktree ?? ".", runDir });
     } catch (error) {
       await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
       throw error;

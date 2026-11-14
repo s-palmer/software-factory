@@ -24,6 +24,12 @@ export const SKILLS_DIR = join(FACTORY_ROOT, ".claude/skills");
 const words = (value: string): string[] => value.trim().split(/\s+/).filter(Boolean);
 const num = (value: string | undefined, fallback: number): number => (value && Number.isFinite(Number(value)) ? Number(value) : fallback);
 
+/** "git@github.com:o/r.git", "ssh://git@github.com/o/r" or "https://github.com/o/r.git" -> "https://github.com/o/r". */
+export function githubWebUrl(remoteUrl: string): string | null {
+  const m = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(remoteUrl.trim());
+  return m ? `https://github.com/${m[1]}/${m[2]}` : null;
+}
+
 export interface FactoryConfig {
   enabled: boolean;
   autostart: boolean;
@@ -31,6 +37,8 @@ export interface FactoryConfig {
   configFile: string | null;
   /** The database file. */
   db: string;
+  /** The repository's GitHub address, for links to pull requests. Null when the remote is not on GitHub. */
+  repoWebUrl: string | null;
   policy: RiskPolicy;
   tracker: TrackerConfig;
   /** The PM run's skill files, when the project replaces them. */
@@ -115,6 +123,13 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
     autostart: env.FACTORY_AUTOSTART === "1",
     configFile: file,
     db,
+    repoWebUrl: (() => {
+      try {
+        return githubWebUrl(execFileSync("git", ["remote", "get-url", env.FACTORY_REMOTE ?? project.remote], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+      } catch {
+        return null;
+      }
+    })(),
     policy,
     tracker: project.tracker,
     planningSkills: project.skills.stages.planning,
@@ -126,6 +141,7 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       base: env.FACTORY_BASE ?? project.base,
       home,
       claudeCommand: words(env.FACTORY_CLAUDE_COMMAND ?? "claude"),
+      learningsFile: join(home, "learnings.md"),
       installCommand: words(commands.install),
       syncCommand: words(commands.sync),
       lintCommand: commands.lint ? words(commands.lint) : null,

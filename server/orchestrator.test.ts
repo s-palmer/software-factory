@@ -154,6 +154,7 @@ const DEFAULTS: Record<string, Record<string, unknown>> = {
   implement: { summary: "Implemented.", questions: [], followUps: ["Paginate later"] },
   review: { verdict: "approve", summary: "Looks right.", blocking: [] },
   "browser check": { summary: "All good.", blocked: false, criteria: [{ criterion: "The list shows posts", pass: true, evidence: "3 posts shown", screenshots: [] }] },
+  retro: { summary: "One lesson.", learnings: [{ kind: "factory", summary: "Run the tests with pnpm test.", target: "", evidence: ["jest was denied"] }] },
   "before pictures": { summary: "Captured.", criteria: [{ criterion: "The list shows posts", screenshots: [], note: "" }] },
   "pull request text": { title: "Show posts", body: "Adds the list.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)" },
   decider: { summary: "Answered.", decisions: [] },
@@ -288,6 +289,33 @@ describe("tickets", () => {
     expect(s.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([`/fh/worktrees/${task.id}`, "/code/app/.git"]));
     expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/fh", "/code/app"]));
     expect(s.hooks).toBeDefined();
+  });
+});
+
+describe("retro", () => {
+  it("proposes learnings once when a task is done, and again only for a new escalation", async () => {
+    const task = await newTask();
+    expect(await drive(task.id)).toContain("done");
+    expect(await orch.retroNext()).toBe(true);
+    expect(await orch.retroNext()).toBe(false);
+    const learnings = await db.listLearnings();
+    expect(learnings).toEqual([expect.objectContaining({ kind: "factory", summary: "Run the tests with pnpm test.", status: "open", sourceTaskId: task.id, evidence: ["jest was denied"] })]);
+    const retro = fakes.calls.find((c) => c.phase === ("retro" as Phase))!;
+    expect(retro.prompt).toContain("at most three learnings");
+    expect(retro.prompt).toContain("## Runs, oldest first");
+    expect(retro.call.disallowedTools).toEqual(expect.arrayContaining(["Write", "Edit"]));
+    const runs = await db.listAgentRuns(task.id);
+    expect(runs.find((r) => r.kind === "retro")).toMatchObject({ stage: "done", status: "passed" });
+  });
+
+  it("runs for an escalated task, and records nothing when the retro proposes nothing", async () => {
+    fakes.script("retro" as Phase, { summary: "Nothing worth a rule.", learnings: [] });
+    fakes.testsPassBeforeChange = true;
+    const task = await newTask();
+    expect((await drive(task.id)).at(-1)).toBe("escalated");
+    expect(await orch.retroNext()).toBe(true);
+    expect(await db.listLearnings()).toEqual([]);
+    expect(await orch.retroNext()).toBe(false);
   });
 });
 

@@ -91,7 +91,7 @@ if (config.enabled) {
 } else {
   console.log("orchestrator off (FACTORY_ORCHESTRATOR=0)");
 }
-const app = createApp(db, { runner, policy, orchestrator, planner, tracker: config.tracker, env, artifactRoot: artifactDir });
+const app = createApp(db, { runner, policy, orchestrator, planner, tracker: config.tracker, env, artifactRoot: artifactDir, learningsFile: config.effects.learningsFile, repoWebUrl: config.repoWebUrl });
 app.use("/artifacts/*", serveStatic({ root: artifactDir, rewriteRequestPath: (p) => p.replace(/^\/artifacts/, "") }));
 
 // Loopback only: the API has no auth of its own; reach it through the Vite proxy.

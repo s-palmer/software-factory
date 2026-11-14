@@ -120,6 +120,11 @@ export function TaskPage({ id }: { id: string }) {
         <button type="button" className="step" onClick={step} disabled={stepping || task.status === "done"}>
           {stepping ? "Starting…" : "Run next step"}
         </button>
+        {task.prUrl && (
+          <a className="button task-page__open-pr" href={task.prUrl} target="_blank" rel="noreferrer">
+            Open pull request #{task.prNumber}
+          </a>
+        )}
       </header>
       <p className="task-page__facts">
         Attempts: <strong>{task.attempts}</strong> · Cost: <strong>{formatCost(task.costUsd)}</strong>
@@ -130,7 +135,14 @@ export function TaskPage({ id }: { id: string }) {
         )}
         {task.prNumber !== null && (
           <>
-            {" "}· PR <strong>#{task.prNumber}</strong>
+            {" "}· PR{" "}
+            {task.prUrl ? (
+              <a href={task.prUrl} target="_blank" rel="noreferrer">
+                <strong>#{task.prNumber}</strong>
+              </a>
+            ) : (
+              <strong>#{task.prNumber}</strong>
+            )}
           </>
         )}
       </p>

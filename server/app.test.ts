@@ -244,6 +244,39 @@ describe("artifacts", () => {
   });
 });
 
+describe("pull request links", () => {
+  it("gives a task with a PR its web address", async () => {
+    app = createApp(db, { repoWebUrl: "https://github.com/o/r" });
+    const task = await db.createTask({ title: "x", description: "" });
+    expect(((await (await app.request(`/api/tasks/${task.id}`)).json()) as TaskDetail).task.prUrl).toBeNull();
+    await db.updateTask(task.id, { prNumber: 42 });
+    expect(((await (await app.request(`/api/tasks/${task.id}`)).json()) as TaskDetail).task.prUrl).toBe("https://github.com/o/r/pull/42");
+  });
+});
+
+describe("learnings", () => {
+  it("lets a person edit and approve a learning, and apply it; an agent may do neither", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "factory-learnings-")), "learnings.md");
+    app = createApp(db, { learningsFile: file });
+    const task = await db.createTask({ title: "x", description: "" });
+    const [l] = await db.addLearnings(task.id, [{ kind: "factory", summary: "Read the plan first.", target: null, evidence: [] }]);
+    const patch = (body: unknown, actor = "human") =>
+      app.request(`/api/learnings/${l!.id}`, { method: "PATCH", headers: { "content-type": "application/json", "x-factory-actor": actor }, body: JSON.stringify(body) });
+    expect((await patch({ status: "approved" }, "agent:pm")).status).toBe(403);
+    expect((await patch({})).status).toBe(400);
+    expect(await (await patch({ summary: "Read the task list first.", kind: "codebase", status: "approved" })).json()).toMatchObject({
+      summary: "Read the task list first.",
+      kind: "codebase",
+      target: "CLAUDE.md",
+      status: "approved",
+    });
+    expect((await app.request("/api/learnings/apply", { method: "POST", headers: { "x-factory-actor": "agent:pm" } })).status).toBe(403);
+    const applied = (await (await app.request("/api/learnings/apply", { method: "POST" })).json()) as { tasks: unknown[] };
+    expect(applied.tasks).toHaveLength(1);
+    expect((await patch({ summary: "too late" })).status).toBe(409);
+  });
+});
+
 describe("local environment", () => {
   function fakeEnv(up = false) {
     const started: string[] = [];

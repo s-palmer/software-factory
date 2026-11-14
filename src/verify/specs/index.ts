@@ -15,3 +15,4 @@ import "./TaskNotes.verify";
 import "./WaitingFor.verify";
 import "./EnvPanel.verify";
 import "./BeforeAfter.verify";
+import "./LearningList.verify";

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_POLICY } from "../shared/config";
-import { loadConfig, readProjectConfig } from "./config";
+import { githubWebUrl, loadConfig, readProjectConfig } from "./config";
 
 const repo = (config?: unknown) => {
   const dir = mkdtempSync(join(tmpdir(), "factory-config-"));
@@ -79,3 +79,13 @@ describe("project config", () => {
     expect(mcp.args.join(" ")).toMatch(/node_modules\/\.bin\/playwright-mcp" --headless --ignore-https-errors --isolated --executable-path "\/bin\/chromium"/);
   });
 });
+
+describe("GitHub address", () => {
+  it("reads the repository's web address from its remote", () => {
+    expect(githubWebUrl("git@github.com:innovate/app.git")).toBe("https://github.com/innovate/app");
+    expect(githubWebUrl("https://github.com/o/r.git")).toBe("https://github.com/o/r");
+    expect(githubWebUrl("ssh://git@github.com/o/r")).toBe("https://github.com/o/r");
+    expect(githubWebUrl("git@gitlab.com:o/r.git")).toBeNull();
+  });
+});
+
