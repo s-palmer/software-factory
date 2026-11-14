@@ -1,0 +1,631 @@
+/**
+ * The factory orchestrator: plain code that takes one step of one task at a time, runs the
+ * stage's agent, checks the result itself and moves the task. No human gates: questions go to the decider, and
+ * anything it cannot settle, any exhausted retry limit and any high-risk change escalates.
+ *
+ * Every side effect goes through `Effects`, so tests drive the whole lifecycle with fakes.
+ */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Task, TaskContext } from "../shared/api";
+import { afterFailure, afterSuccess, FACTORY_STAGES, type TaskStatus } from "../shared/lifecycle";
+import { modelFor, type Phase } from "../shared/models";
+import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
+import type { ClaudeCall, ClaudeResult } from "./claude";
+import type { FactoryDb } from "./db";
+import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type ToolRules } from "./phases";
+
+export interface GateStep {
+  name: string;
+  ok: boolean;
+  output: string;
+}
+export interface GateResult {
+  ok: boolean;
+  steps: GateStep[];
+}
+
+export interface EnvController {
+  /** Start the local app from `worktree` as its own process group; returns the pid. */
+  start(worktree: string, logPath: string): number;
+  /** Every health URL answers. */
+  isUp(): Promise<boolean>;
+  isRunning(pid: number): boolean;
+  /** Stop the whole process group. */
+  stop(pid: number): Promise<void>;
+  logTail(logPath: string): string;
+}
+
+/** What the factory reads from an open pull request. */
+export type PrStatus = {
+  state: "OPEN" | "MERGED" | "CLOSED";
+  isDraft: boolean;
+  headSha: string;
+  checks: "pass" | "fail" | "pending";
+  failures: string[];
+  /** The branch conflicts with the base branch. */
+  conflicting: boolean;
+  /** Reviews asking for changes, with when they were submitted. */
+  changesRequested: Array<{ at: string; by: string; body: string }>;
+};
+
+export interface Effects {
+  claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string> }): Promise<ClaudeResult>;
+  createWorktree(task: Task): Promise<{ branch: string; worktree: string }>;
+  fileExists(worktree: string, path: string): boolean;
+  /** Changes since the merge base with the base branch. */
+  diff(worktree: string): Promise<FileChange[]>;
+  /** Lint, type check and tests, compared with the merge base. */
+  gate(worktree: string, changes: FileChange[]): Promise<GateResult>;
+  /** Type check new test files, allowing "not yet implemented" errors. */
+  typecheckTests(worktree: string, files: string[]): Promise<GateResult>;
+  runTests(worktree: string, files: string[]): Promise<{ ok: boolean; output: string }>;
+  /** `force`: the branch was moved onto the base, so it replaces the remote with --force-with-lease. */
+  commitAndPush(worktree: string, branch: string, message: string, force?: boolean): Promise<void>;
+  /**
+   * Move the task's own change onto the latest base branch as one patch. Conflicts are left as markers in the listed files.
+   */
+  syncWithBase(worktree: string): Promise<{ upToDate: boolean; conflicts: string[] }>;
+  createPr(worktree: string, branch: string, title: string, body: string): Promise<number>;
+  updatePrBody(worktree: string, pr: number, body: string): Promise<void>;
+  prStatus(worktree: string, pr: number): Promise<PrStatus>;
+  /** Mark the PR ready for review (CI green) with these labels, or back to draft while the factory works on it. */
+  setReady(worktree: string, pr: number, ready: boolean, labels: string[]): Promise<void>;
+  env: EnvController;
+}
+
+export interface OrchestratorConfig {
+  artifactRoot: string;
+  maxAttempts: number;
+  policy: RiskPolicy;
+  /** Path of server/guard.mjs, the locked-file hook. */
+  guardScript: string;
+  envStartTimeoutMs: number;
+  browserBaseUrl: string;
+  browserMcp?: Record<string, unknown> | undefined;
+  /** The project's commands, for the agents' tool rules. */
+  tools?: ToolRules | undefined;
+  /** The phase skills folder. */
+  skillsDir?: string | undefined;
+  /** The branch PRs target, named in the review and PR prompts (default "main"). */
+  baseBranch?: string;
+  tickMs: number;
+  now?: () => Date;
+}
+
+const ENV_LEASE = "env";
+
+const AGENT_STAGES: ReadonlySet<TaskStatus> = new Set(["scoping", "design", "test_writing", "implementing", "reviewing", "pr"]);
+
+export class Orchestrator {
+  private readonly busy = new Set<string>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private ticking = false;
+
+  constructor(
+    private readonly db: FactoryDb,
+    private readonly effects: Effects,
+    private readonly config: OrchestratorConfig,
+  ) {}
+
+  /* ------------------------------ The loop ------------------------------ */
+
+  get running(): boolean {
+    return this.timer !== null;
+  }
+
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.tick(), this.config.tickMs);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  /** The ready task in a factory stage that waited longest, so tasks interleave. */
+  async nextTask(): Promise<string | null> {
+    const queue = await this.db.taskQueue([...FACTORY_STAGES]);
+    return queue.find((id) => !this.busy.has(id)) ?? null;
+  }
+
+  /** One step of one task. Returns false when nothing was ready. */
+  async tick(): Promise<boolean> {
+    if (this.ticking) return false;
+    // The kill switch: a halted factory takes no steps.
+    if (await this.db.getHalt()) return false;
+    this.ticking = true;
+    try {
+      const id = await this.nextTask();
+      if (!id) return false;
+      await this.step(id);
+      return true;
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  async step(taskId: string): Promise<void> {
+    if (this.busy.has(taskId)) return;
+    this.busy.add(taskId);
+    try {
+      const task = await this.db.getTask(taskId);
+      if (!task || !FACTORY_STAGES.has(task.status)) return;
+      if (task.status === "backlog") return await this.setUp(task);
+      if (task.status === "browser_check") return await this.browserCheck(task);
+      if (task.status === "awaiting_merge") return await this.watchPr(task);
+      if (AGENT_STAGES.has(task.status)) return await this.agentStage(task, task.status as AgentStage);
+    } catch (error) {
+      const task = await this.db.getTask(taskId);
+      if (task) await this.escalate(task, `The factory failed: ${(error as Error).message}`);
+    } finally {
+      this.busy.delete(taskId);
+    }
+  }
+
+  /* ------------------------------ Moves ------------------------------ */
+
+  private now(): Date {
+    return this.config.now?.() ?? new Date();
+  }
+
+  private async move(task: Task, to: TaskStatus): Promise<void> {
+    await this.db.moveTask(task.id, task.status, to, "factory");
+  }
+
+  private async escalate(task: Task, reason: string): Promise<void> {
+    const current = await this.db.getTask(task.id);
+    if (!current || current.status === "escalated") return;
+    await this.db.updateTask(task.id, { context: { escalation: reason, escalatedFrom: current.status } });
+    await this.move(current, "escalated");
+  }
+
+  /** Count an attempt and move by the failure rule, with the feedback the next attempt reads. */
+  private async fail(task: Task, stage: TaskStatus, reason: string, feedback: string[]): Promise<void> {
+    const attempts = task.attempts + 1;
+    const next = afterFailure(stage, attempts, this.config.maxAttempts);
+    await this.db.updateTask(task.id, {
+      attempts,
+      context: { feedback, ...(next === "escalated" ? { escalation: `${reason} (attempt ${attempts} of ${this.config.maxAttempts})`, escalatedFrom: stage } : {}) },
+    });
+    await this.move(task, next);
+  }
+
+  /** Stay in the stage but go to the back of the queue, so a waiting task does not starve the others. */
+  private async wait(task: Task, context: Partial<TaskContext> = {}): Promise<void> {
+    await this.db.updateTask(task.id, { context });
+  }
+
+  /* ------------------------------ Stages ------------------------------ */
+
+  private async setUp(task: Task): Promise<void> {
+    const run = await this.db.startAgentRun(task.id, "backlog", "worktree");
+    try {
+      const { branch, worktree } = await this.effects.createWorktree(task);
+      await this.db.updateTask(task.id, { branch, worktree });
+      await this.db.finishAgentRun(run.id, { status: "passed", summary: `${branch} at ${worktree}` });
+    } catch (error) {
+      await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
+      throw error;
+    }
+    await this.move(task, afterSuccess("backlog"));
+  }
+
+  private runDir(task: Task, runId: string): string {
+    return join(this.config.artifactRoot, "tasks", task.id, runId);
+  }
+
+  private async runAgent(
+    task: Task,
+    stage: AgentStage,
+    opts: { phase?: Phase; kind?: string; browserUrl?: string; build?: (ctx: PhaseContext) => ClaudeCall } = {},
+  ): Promise<ClaudeResult> {
+    const phase = opts.phase ?? stage;
+    const model = modelFor(phase, await this.db.getDefaultModels(), task.phaseModels);
+    const run = await this.db.startAgentRun(task.id, stage, opts.kind ?? "agent", model);
+    const runDir = this.runDir(task, run.id);
+    mkdirSync(runDir, { recursive: true });
+    const context = task.context;
+    let settings: object | undefined;
+    if (stage === "implementing" && !opts.build) {
+      const list = join(runDir, "locked.json");
+      writeFileSync(list, JSON.stringify(context.lockedFiles ?? []));
+      settings = lockedFilesSettings(list, this.config.guardScript);
+    }
+    const ctx: PhaseContext = {
+      model,
+      feedback: context.feedback ?? [],
+      lockedFiles: context.lockedFiles ?? [],
+      browserUrl: opts.browserUrl ?? this.config.browserBaseUrl,
+      browserPlan: (context.browserPlan ?? []) as BrowserStep[],
+      browserMcp: this.config.browserMcp,
+      baseBranch: this.config.baseBranch,
+      tools: this.config.tools,
+      skillsDir: this.config.skillsDir,
+      settings,
+    };
+    let result: ClaudeResult;
+    try {
+      result = await this.effects.claude(opts.build ? opts.build(ctx) : phaseCall(stage, task, ctx), { cwd: task.worktree ?? ".", runDir });
+    } catch (error) {
+      await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
+      throw error;
+    }
+    await this.db.finishAgentRun(run.id, {
+      status: result.ok ? "passed" : "failed",
+      costUsd: result.costUsd,
+      turns: result.turns,
+      sessionId: result.sessionId,
+      output: result.output,
+      summary: result.ok ? summaryOf(result.output) : `${result.subtype}: ${result.text.slice(0, 500)}`,
+      logPath: result.logPath,
+    });
+    return result;
+  }
+
+  private async agentStage(task: Task, stage: AgentStage): Promise<void> {
+    const result = await this.runAgent(task, stage);
+    if (!result.ok) return this.escalate(task, `The ${stage} run stopped: ${result.subtype}. ${result.text.slice(0, 500)}`);
+    const output = (result.output ?? {}) as Record<string, unknown>;
+    const questions = strings(output.questions);
+
+    if (questions.length > 0) {
+      const answered = await this.decide(task, stage, questions, String(output.summary ?? ""));
+      if (!answered) {
+        await this.db.updateTask(task.id, { context: { questions } });
+        return this.escalate(task, `The ${stage} phase has questions the decider could not settle: ${questions.join(" ")}`);
+      }
+      // Scoping hands the answers to design; any other stage runs again with them.
+      if (stage !== "scoping") return;
+    }
+
+    switch (stage) {
+      case "scoping": {
+        // A task made from an issue number alone takes the issue's title. A typed title stays.
+        const title = String(output.title ?? "").trim();
+        await this.db.updateTask(task.id, {
+          ...(title && task.title === task.ticketKey ? { title } : {}),
+          context: { needsBrowser: Boolean(output.needsBrowser), questions: [], feedback: questions.length ? (await this.db.getTask(task.id))!.context.feedback : [] },
+        });
+        return this.move(task, afterSuccess("scoping"));
+      }
+      case "design":
+        await this.db.updateTask(task.id, {
+          context: {
+            needsBrowser: Boolean(output.needsBrowser),
+            browserPath: typeof output.browserPath === "string" ? output.browserPath : "/",
+            browserPlan: Array.isArray(output.browserPlan) ? (output.browserPlan as BrowserStep[]) : [],
+            feedback: [],
+          },
+        });
+        return this.move(task, afterSuccess("design"));
+      case "test_writing":
+        return this.checkTests(task, output);
+      case "implementing":
+        return this.checkImplementation(task, output);
+      case "reviewing": {
+        const blocking = strings(output.blocking);
+        if (output.verdict !== "approve" || blocking.length > 0) {
+          return this.fail(task, "reviewing", `Review found blocking issues: ${blocking.join(" ")}`, blocking.map((b) => `The reviewer found: ${b}`));
+        }
+        await this.db.updateTask(task.id, { context: { feedback: [] } });
+        return this.move(task, afterSuccess("reviewing", { needsBrowser: task.context.needsBrowser ?? true }));
+      }
+      case "pr":
+        return this.publish(task, output);
+      case "browser_check":
+        throw new Error("browser_check runs through browserCheck");
+    }
+  }
+
+  /**
+   * The decider answers a phase's questions, once per stage. Returns false when a person must
+   * decide: the run failed, gave nothing, flagged a question as needing a person, or already ran for this stage.
+   */
+  private async decide(task: Task, stage: AgentStage, questions: string[], summary: string): Promise<boolean> {
+    const used = task.context.deciderUsed ?? [];
+    if (used.includes(stage)) return false;
+    await this.db.updateTask(task.id, { context: { deciderUsed: [...used, stage] } });
+    const result = await this.runAgent(task, stage, {
+      phase: "decider",
+      kind: "decider",
+      build: (ctx) => deciderCall(task, ctx, stage, questions, summary),
+    });
+    const decisions = ((result.output as { decisions?: unknown } | null)?.decisions ?? []) as Array<{ question: string; answer: string; needsHuman: boolean }>;
+    if (!result.ok || decisions.length === 0 || decisions.some((d) => d.needsHuman)) return false;
+    await this.db.updateTask(task.id, {
+      context: {
+        feedback: decisions.map((d) => `${d.question} Decision: ${d.answer}`),
+        decisions: [...(task.context.decisions ?? []), ...decisions.map((d) => ({ stage, question: d.question, answer: d.answer }))],
+        questions: [],
+      },
+    });
+    await this.db.recordEvent(task.id, "decisions_made", { stage, decisions });
+    return true;
+  }
+
+  /** The test phase's output is checked by code, not trusted. */
+  private async checkTests(task: Task, output: Record<string, unknown>): Promise<void> {
+    const worktree = task.worktree!;
+    const files = strings(output.testFiles);
+    const noTestsReason = String(output.noTestsReason ?? "").trim();
+    if (files.length === 0 && noTestsReason) {
+      await this.db.updateTask(task.id, { context: { lockedFiles: [], noTestsReason, feedback: [] } });
+      return this.move(task, afterSuccess("test_writing"));
+    }
+    const missing = files.filter((f) => !this.effects.fileExists(worktree, f));
+    if (files.length === 0 || missing.length > 0) {
+      return this.escalate(task, `The test phase wrote no usable test files. Missing: ${missing.join(", ") || "all"}`);
+    }
+    // Implement cannot edit locked tests, so type faults in them must be fixed now.
+    const types = await this.effects.typecheckTests(worktree, files);
+    if (!types.ok) {
+      return this.fail(task, "test_writing", "The new tests add type errors", failedSteps(types, "on the new tests"));
+    }
+    // Back from implement with test fixes: the code exists, so the implement gate runs the tests instead.
+    if (task.context.codeExists) {
+      await this.db.updateTask(task.id, { context: { lockedFiles: files, codeExists: undefined, feedback: [] } });
+      return this.move(task, "implementing");
+    }
+    const run = await this.db.startAgentRun(task.id, "test_writing", "red-check");
+    const tests = await this.effects.runTests(worktree, files);
+    await this.db.finishAgentRun(run.id, { status: tests.ok ? "failed" : "passed", summary: tests.output.slice(-2000) });
+    if (tests.ok) return this.escalate(task, "The new tests pass before the change, so they do not test it.");
+    await this.db.updateTask(task.id, { context: { lockedFiles: files, feedback: [] } });
+    return this.move(task, afterSuccess("test_writing"));
+  }
+
+  private async checkImplementation(task: Task, output: Record<string, unknown>): Promise<void> {
+    // A locked test can be wrong in a way no implementation passes; the test phase owns it.
+    const testFixes = strings(output.testFixes);
+    if (testFixes.length > 0) {
+      const attempts = task.attempts + 1;
+      if (attempts >= this.config.maxAttempts) return this.escalate(task, `The locked tests still need changes: ${testFixes.join(" ")}`);
+      await this.db.updateTask(task.id, {
+        attempts,
+        context: { codeExists: true, feedback: testFixes.map((f) => `The implement phase found this problem in your tests. Fix the test, not the code: ${f}`) },
+      });
+      return this.move(task, "test_writing");
+    }
+    await this.db.updateTask(task.id, { context: { followUps: strings(output.followUps) } });
+
+    const worktree = task.worktree!;
+    const changes = await this.effects.diff(worktree);
+    const run = await this.db.startAgentRun(task.id, "implementing", "gate");
+    let result: GateResult;
+    try {
+      result = await this.effects.gate(worktree, changes);
+    } catch (error) {
+      // Close the run, so it does not stay "running" with nothing behind it.
+      await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
+      throw error;
+    }
+    await this.db.finishAgentRun(run.id, {
+      status: result.ok ? "passed" : "failed",
+      output: result.steps.map((s) => ({ name: s.name, ok: s.ok })),
+      summary: result.steps.map((s) => `${s.ok ? "pass" : "FAIL"} ${s.name}`).join(", "),
+    });
+    if (!result.ok) {
+      return this.fail(task, "implementing", `The gate failed: ${result.steps.filter((s) => !s.ok).map((s) => s.name).join(", ")}`, failedSteps(result));
+    }
+    const risk = classifyRisk(changes, this.config.policy, { lockedFiles: task.context.lockedFiles ?? [] });
+    await this.db.updateTask(task.id, { context: { risk, feedback: [], codeExists: true } });
+    return this.move(task, afterSuccess("implementing"));
+  }
+
+  /** The browser check under the environment lease. The lease is always released. */
+  private async browserCheck(task: Task): Promise<void> {
+    if (!(await this.db.acquireLease(ENV_LEASE, task.id, null))) {
+      return this.wait(task, { envWait: "Another task is using the local app. The browser check waits for it." });
+    }
+    let pid: number | null = null;
+    try {
+      // Never test an app the factory did not start: it may be another worktree's code.
+      if (await this.effects.env.isUp()) {
+        return await this.wait(task, { envWait: "The local app is already running outside the factory. The browser check waits until it stops." });
+      }
+      const logPath = join(this.config.artifactRoot, "tasks", task.id, `env-${this.now().getTime()}.log`);
+      mkdirSync(join(this.config.artifactRoot, "tasks", task.id), { recursive: true });
+      pid = this.effects.env.start(task.worktree!, logPath);
+      await this.db.updateLeasePid(ENV_LEASE, pid);
+      const started = pid;
+      // Stop waiting as soon as the process exits: its start script may have failed.
+      await waitUntil(async () => (await this.effects.env.isUp()) || !this.effects.env.isRunning(started), this.config.envStartTimeoutMs);
+      if (!(await this.effects.env.isUp())) {
+        return await this.escalate(task, `The local app did not start. End of ${logPath}:\n${this.effects.env.logTail(logPath)}`);
+      }
+      const browserUrl = new URL(task.context.browserPath ?? "/", this.config.browserBaseUrl).toString();
+      const result = await this.runAgent(task, "browser_check", { browserUrl });
+      if (!result.ok) return await this.escalate(task, `The browser run stopped: ${result.subtype}. ${result.text.slice(0, 500)}`);
+      const output = result.output as { blocked: boolean; summary: string; criteria: Array<{ criterion: string; pass: boolean; untestable?: boolean; evidence: string }> };
+      if (output.blocked) return await this.escalate(task, `The browser check was blocked: ${output.summary}`);
+      // A criterion the local app cannot show is not a failure; the PR lists it.
+      const untested = output.criteria.filter((c) => !c.pass && c.untestable).map((c) => ({ criterion: c.criterion, reason: c.evidence }));
+      const failed = output.criteria.filter((c) => !c.pass && !c.untestable);
+      await this.db.updateTask(task.id, { context: { untested, envWait: undefined } });
+      if (failed.length > 0) {
+        return await this.fail(
+          task,
+          "browser_check",
+          `The browser check failed: ${failed.map((c) => c.criterion).join("; ")}`,
+          failed.map((c) => `In the browser, "${c.criterion}" failed: ${c.evidence}`),
+        );
+      }
+      await this.db.updateTask(task.id, { context: { feedback: [] } });
+      return await this.move(task, afterSuccess("browser_check"));
+    } finally {
+      if (pid !== null) await this.effects.env.stop(pid);
+      await this.db.releaseLease(ENV_LEASE);
+    }
+  }
+
+  private async publish(task: Task, output: Record<string, unknown>): Promise<void> {
+    const worktree = task.worktree!;
+    const branch = task.branch!;
+    const title = String(output.title ?? task.title);
+    // The footer carries the attribution, so drop any line the agent added.
+    const agentBody = String(output.body ?? "").replace(/^.*Generated with \[Claude Code\].*$/gm, "").trim();
+    const current = (await this.db.getTask(task.id))!;
+    const body = `${agentBody}\n\n${factoryFooter(current)}`;
+    const run = await this.db.startAgentRun(task.id, "pr", "publish");
+    try {
+      const message = `${title}\n\nRaised by the software factory (task ${task.id}).\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n`;
+      await this.effects.commitAndPush(worktree, branch, message, Boolean(task.context.forcePush));
+      let pr = task.prNumber;
+      if (pr) {
+        // Back to draft while the change is not green again, so the merge agent does not merge it mid-fix.
+        await this.effects.setReady(worktree, pr, false, []);
+        await this.effects.updatePrBody(worktree, pr, body);
+      } else pr = await this.effects.createPr(worktree, branch, title, body);
+      await this.db.updateTask(task.id, {
+        prNumber: pr,
+        // The first PR starts a fresh retry budget; later rounds (failed checks) share it, so they cannot loop forever.
+        ...(task.prNumber ? {} : { attempts: 0 }),
+        context: {
+          prTitle: task.context.prTitle ?? title,
+          prBody: agentBody,
+          prOpenedAt: task.context.prOpenedAt ?? this.now().toISOString(),
+          lastPushAt: this.now().toISOString(),
+          readyAt: undefined,
+          forcePush: undefined,
+          feedback: [],
+        },
+      });
+      await this.db.finishAgentRun(run.id, { status: "passed", summary: `PR #${pr}` });
+    } catch (error) {
+      await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
+      throw error;
+    }
+    return this.move(task, afterSuccess("pr"));
+  }
+
+  /**
+   * Watch the PR until someone else merges it. The factory never merges. It sends
+   * failing checks and requested changes back to implement, marks the PR ready with its risk label once CI is
+   * green, and moves to done when the PR is merged.
+   */
+  private async watchPr(task: Task): Promise<void> {
+    const worktree = task.worktree!;
+    const pr = task.prNumber;
+    if (!pr) return this.escalate(task, "The task reached the merge stage with no pull request.");
+    const status = await this.effects.prStatus(worktree, pr);
+    if (status.state === "MERGED") {
+      await this.db.recordEvent(task.id, "pr_merged", { pr, headSha: status.headSha });
+      return this.move(task, afterSuccess("awaiting_merge"));
+    }
+    if (status.state === "CLOSED") return this.escalate(task, `PR #${pr} was closed without a merge.`);
+
+    // A conflict with the base (seen here, or asked for with `factory sync`): move the change onto the base.
+    if (status.conflicting || task.context.syncRequested) return this.sync(task, pr);
+
+    const since = Date.parse(task.context.lastPushAt ?? "") || 0;
+    const requests = status.changesRequested.filter((r) => Date.parse(r.at) > since);
+    if (requests.length > 0) {
+      // A review round: the reviewer may need a test changed, so the lock is lifted.
+      await this.db.updateTask(task.id, { context: { lockedFiles: [], readyAt: undefined } });
+      return this.fail(
+        task,
+        "awaiting_merge",
+        `Changes were requested on PR #${pr}`,
+        requests.map((r) => `${r.by} asked for changes on the pull request: ${r.body}`),
+      );
+    }
+    if (status.checks === "fail") {
+      return this.fail(task, "awaiting_merge", `Checks failed on PR #${pr}`, status.failures.map((f) => `A check failed on the pull request: ${f}`));
+    }
+    if (status.checks === "pending") return this.wait(task);
+    if (status.isDraft || !task.context.readyAt) {
+      const risk = task.context.risk?.level === "high" ? "high" : "low";
+      await this.effects.setReady(worktree, pr, true, ["factory", `risk:${risk}`]);
+      await this.db.updateTask(task.id, { context: { readyAt: this.now().toISOString() } });
+      await this.db.recordEvent(task.id, "pr_ready", { pr, headSha: status.headSha, risk });
+      return;
+    }
+    return this.wait(task);
+  }
+
+  /**
+   * Conflict resolution. The change is re-applied onto the latest base. Clean: run the gate here and
+   * push (force, with lease). Conflicts: implement resolves the markers, and the whole pipeline runs again.
+   */
+  private async sync(task: Task, pr: number): Promise<void> {
+    const worktree = task.worktree!;
+    const run = await this.db.startAgentRun(task.id, "awaiting_merge", "sync");
+    let result: { upToDate: boolean; conflicts: string[] };
+    try {
+      result = await this.effects.syncWithBase(worktree);
+    } catch (error) {
+      await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
+      throw error;
+    }
+    await this.db.finishAgentRun(run.id, {
+      status: result.conflicts.length ? "failed" : "passed",
+      output: result,
+      summary: result.upToDate ? "Already on the latest base" : result.conflicts.length ? `Conflicts in ${result.conflicts.join(", ")}` : "Moved onto the latest base, no conflicts",
+    });
+    await this.db.recordEvent(task.id, "synced_with_base", { pr, ...result });
+    await this.db.updateTask(task.id, { context: { syncRequested: undefined, readyAt: undefined, forcePush: !result.upToDate } });
+    if (result.conflicts.length) {
+      await this.effects.setReady(worktree, pr, false, []);
+      await this.db.updateTask(task.id, {
+        attempts: 0,
+        context: {
+          feedback: [
+            `The base branch moved and this change now conflicts with it. Resolve the conflict markers in these files, keeping both sides' intent: ${result.conflicts.join(", ")}.`,
+          ],
+        },
+      });
+      return this.move(task, "implementing");
+    }
+    if (result.upToDate) return;
+    const gate = await this.effects.gate(worktree, await this.effects.diff(worktree));
+    if (!gate.ok) {
+      return this.fail(task, "awaiting_merge", `The gate failed after moving onto the base: ${gate.steps.filter((s) => !s.ok).map((s) => s.name).join(", ")}`, failedSteps(gate, "after the move onto the latest base"));
+    }
+    await this.effects.commitAndPush(worktree, task.branch!, `Move onto the latest base\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n`, true);
+    await this.effects.setReady(worktree, pr, false, []);
+    await this.db.updateTask(task.id, { context: { forcePush: undefined, lastPushAt: this.now().toISOString() } });
+  }
+}
+
+export function factoryFooter(task: Task): string {
+  const c = task.context;
+  const risk = !c.risk ? "Not checked." : c.risk.level === "high" ? `High:\n${c.risk.reasons.map((r) => `  - ${r}`).join("\n")}` : "Normal. No protected path changed.";
+  return [
+    "## Software factory",
+    "",
+    `The software factory raised this pull request for task \`${task.id}\`${task.ticketKey ? ` (${task.ticketKey})` : ""}. The orchestrator compared lint, type errors and the changed tests with the merge base and found nothing new. It marks the PR ready for review, labelled \`risk:low\` or \`risk:high\`, once CI is green; it never merges.`,
+    "",
+    `- Risk: ${risk}`,
+    ...(Object.keys(task.phaseModels).length ? [`- Model overrides: ${Object.entries(task.phaseModels).map(([p, m]) => `${p} ${m}`).join(", ")}`] : []),
+    `- Estimated agent cost: $${task.costUsd.toFixed(2)}`,
+    ...(c.noTestsReason ? [`- No new unit tests: ${c.noTestsReason}`] : []),
+    ...(c.untested ?? []).map((u) => `- Not checked in the browser: ${u.criterion} (${u.reason})`),
+    ...(c.decisions?.length ? ["", "### Decisions the decider made", "", ...c.decisions.map((d) => `- ${d.stage}: ${d.question} **${d.answer}**`)] : []),
+    ...(c.followUps?.length ? ["", "### Follow-ups", "", ...c.followUps.map((f) => `- ${f}`)] : []),
+    "",
+    "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+  ].join("\n");
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0) : [];
+}
+
+function summaryOf(output: unknown): string | null {
+  const summary = (output as { summary?: unknown } | null)?.summary;
+  return typeof summary === "string" ? summary.slice(0, 1000) : null;
+}
+
+function failedSteps(result: GateResult, where = ""): string[] {
+  return result.steps.filter((s) => !s.ok).map((s) => `\`${s.name}\` failed${where ? ` ${where}` : ""}:\n${s.output.slice(-3000)}`);
+}
+
+export async function waitUntil(check: () => Promise<boolean>, timeoutMs: number, intervalMs = Math.min(2000, timeoutMs)): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}

@@ -1,0 +1,15 @@
+// Import for side effects: each spec registers its unit. New unit = new spec file + one line here.
+import "./TaskTable.verify";
+import "./NewTaskForm.verify";
+import "./ScreenshotGallery.verify";
+import "./FeedbackPanel.verify";
+import "./PipelineProgress.verify";
+import "./PipelineOverview.verify";
+import "./RunTable.verify";
+import "./RunResults.verify";
+import "./ModelPicker.verify";
+import "./DefaultModelsEditor.verify";
+import "./AgentRunList.verify";
+import "./OrchestratorSwitch.verify";
+import "./TaskNotes.verify";
+import "./WaitingFor.verify";

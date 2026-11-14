@@ -1,0 +1,53 @@
+#!/bin/sh
+# Unpack the system libraries Playwright's Chromium needs into a user directory, without root.
+# Debian 12 (bookworm) amd64. Uses apt with a private package-list dir (signatures checked
+# against the system keyring), downloads the .debs and extracts them with dpkg-deb -x.
+# No maintainer scripts are run. Safe to re-run; pass --force to re-extract anyway.
+# Afterwards: bin/with-browser-libs pnpm e2e
+set -eu
+
+LIBS="${FACTORY_BROWSER_LIBS:-$HOME/.local/share/factory/chromium-libs}"
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/factory/apt-state"
+PACKAGES="libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1
+  libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2 libdbus-1-3
+  libdrm2 libwayland-server0 libxi6 libcups2 libavahi-client3 libavahi-common3 libavahi-common-data"
+
+LD_LIBRARY_PATH="$LIBS/usr/lib/x86_64-linux-gnu:$LIBS/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+
+missing() {
+  found=0
+  for bin in "$HOME"/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell \
+             "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux64/chrome; do
+    [ -x "$bin" ] || continue
+    found=1
+    ldd "$bin" | grep "not found" || true
+  done
+  [ "$found" = 1 ] || echo "no Playwright Chromium found; run: pnpm exec playwright install chromium" >&2
+}
+
+if [ "${1:-}" != "--force" ] && [ -d "$LIBS" ] && [ -z "$(missing)" ]; then
+  echo "Browser libs already set up in $LIBS"
+  exit 0
+fi
+
+mkdir -p "$LIBS" "$STATE/lists/partial" "$STATE/cache/archives/partial"
+APT="-o Dir::State::Lists=$STATE/lists -o Dir::Cache=$STATE/cache"
+# shellcheck disable=SC2086
+apt-get $APT update >/dev/null
+
+DEBS="$(mktemp -d)"
+trap 'rm -rf "$DEBS"' EXIT
+# shellcheck disable=SC2086
+(cd "$DEBS" && apt-get $APT download $PACKAGES)
+for deb in "$DEBS"/*.deb; do
+  dpkg-deb -x "$deb" "$LIBS"
+done
+
+left="$(missing)"
+if [ -n "$left" ]; then
+  echo "Still missing after setup:" >&2
+  echo "$left" | sort -u >&2
+  exit 1
+fi
+echo "Browser libs ready in $LIBS. Use: bin/with-browser-libs pnpm e2e"

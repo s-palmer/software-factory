@@ -1,0 +1,7 @@
+#!/bin/sh
+# Run a command with the locally unpacked Chromium system libraries on LD_LIBRARY_PATH.
+# Set them up first with bin/setup-browser-libs. Usage: bin/with-browser-libs pnpm e2e
+LIBS="${FACTORY_BROWSER_LIBS:-$HOME/.local/share/factory/chromium-libs}"
+LD_LIBRARY_PATH="$LIBS/usr/lib/x86_64-linux-gnu:$LIBS/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+exec "$@"

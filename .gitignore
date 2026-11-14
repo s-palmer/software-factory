@@ -1,0 +1,7 @@
+/node_modules/
+/dist/
+/artifacts/
+/test-results/
+/playwright-report/
+/data/
+/e2e/fixtures/artifacts/runs/

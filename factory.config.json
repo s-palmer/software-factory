@@ -1,0 +1,92 @@
+{
+  "base": "main",
+  "remote": "origin",
+  "projectDir": "",
+  "commands": {
+    "install": "pnpm install --frozen-lockfile --prefer-offline",
+    "sync": "pnpm install --no-frozen-lockfile --prefer-offline",
+    "lint": "pnpm exec oxlint --deny-warnings",
+    "typecheck": "pnpm exec tsc --noEmit --pretty false",
+    "test": "pnpm exec vitest run"
+  },
+  "app": {
+    "url": "http://localhost:5173",
+    "healthUrls": [],
+    "startTimeoutMs": 300000
+  },
+  "maxAttempts": 3,
+  "policy": {
+    "alwaysHuman": [
+      {
+        "pattern": "factory.config.json",
+        "reason": "Changes the factory config or risk policy"
+      },
+      {
+        "pattern": "e2e/**",
+        "reason": "Changes the browser tests that judge the work"
+      },
+      {
+        "pattern": "src/verify/**",
+        "reason": "Changes the verification framework or specs"
+      },
+      {
+        "pattern": "**/*.test.ts",
+        "reason": "Changes unit tests"
+      },
+      {
+        "pattern": "playwright.config.ts",
+        "reason": "Changes how browser verification runs"
+      },
+      {
+        "pattern": "vite.config.ts",
+        "reason": "Changes build, test or proxy configuration"
+      },
+      {
+        "pattern": ".oxlintrc.json",
+        "reason": "Changes lint rules"
+      },
+      {
+        "pattern": "tsconfig.json",
+        "reason": "Changes type-checking rules"
+      },
+      {
+        "pattern": "package.json",
+        "reason": "Adds or changes dependencies or scripts"
+      },
+      {
+        "pattern": "pnpm-lock.yaml",
+        "reason": "Changes installed dependencies"
+      },
+      {
+        "pattern": "server/basic-auth.ts",
+        "reason": "Touches authentication"
+      },
+      {
+        "pattern": "**/auth/**",
+        "reason": "Touches authentication"
+      },
+      {
+        "pattern": "**/payments/**",
+        "reason": "Touches payments"
+      },
+      {
+        "pattern": "**/migrations/**",
+        "reason": "Changes the database schema"
+      },
+      {
+        "pattern": "server/db.ts",
+        "reason": "Changes the factory's database schema or queries"
+      },
+      {
+        "pattern": "**/.env*",
+        "reason": "Touches secrets or environment configuration"
+      },
+      {
+        "pattern": ".github/**",
+        "reason": "Changes CI or deployment"
+      }
+    ],
+    "maxChangedFiles": 20,
+    "maxChangedLines": 400
+  }
+}

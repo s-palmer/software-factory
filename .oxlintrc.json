@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "import", "vitest"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "no-underscore-dangle": ["warn", { "allow": ["__verify"] }],
+    "import/no-unassigned-import": ["warn", { "allow": ["**/*.css", "**/verifiers", "**/specs"] }]
+  },
+  "overrides": [
+    {
+      "files": ["src/verify/verifiers/index.ts", "src/verify/specs/index.ts"],
+      "rules": { "import/no-unassigned-import": "off" }
+    }
+  ],
+  "ignorePatterns": ["dist", "artifacts", "test-results", "playwright-report"]
+}

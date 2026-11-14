@@ -1,0 +1,4 @@
+#!/bin/sh
+# The factory CLI. Put this folder on PATH (or symlink it) so agents can run `factory ...` from any worktree.
+DIR=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
+exec "$DIR/node_modules/.bin/tsx" "$DIR/cli/bin.ts" "$@"
