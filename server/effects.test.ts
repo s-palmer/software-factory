@@ -128,6 +128,22 @@ describe("git and the gate, against a real repository", () => {
     ]);
   });
 
+  it("finds escape hatches in new and changed test files, and ignores other files", async () => {
+    const fx = createEffects(config);
+    const { worktree } = await fx.createWorktree(task);
+    // The repository is shared by these tests: put back what this one changes.
+    const a = readFileSync(join(worktree, "src", "a.ts"), "utf8");
+    mkdirSync(join(worktree, "test"), { recursive: true });
+    writeFileSync(join(worktree, "test", "helpers.ts"), "// oxlint-disable-next-line typescript/no-explicit-any\nexport const h = (x: any) => x;\n");
+    writeFileSync(join(worktree, "src", "a.ts"), "// @ts-ignore\nexport const a = 2;\n");
+    writeFileSync(join(worktree, "src", "c.ts"), "export const c = 1 as any;\n");
+    expect(await fx.testHatches(worktree, ["test/helpers.ts", "src/a.ts"])).toEqual(["1 more `: any`", "1 more `@ts-ignore`", "1 more `lint disable`"]);
+    expect(await fx.testHatches(worktree, [])).toEqual([]);
+    writeFileSync(join(worktree, "src", "a.ts"), a);
+    rmSync(join(worktree, "test"), { recursive: true });
+    rmSync(join(worktree, "src", "c.ts"));
+  });
+
   it("lets one task at a time use the merge-base checkout", async () => {
     const fx = createEffects(config);
     const { worktree } = await fx.createWorktree(task);

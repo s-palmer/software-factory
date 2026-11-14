@@ -93,6 +93,10 @@ class Fakes implements Effects {
   async gate() {
     return this.gates.shift() ?? { ok: true, steps: [{ name: "lint", ok: true, output: "" }] };
   }
+  testHatchesFound: string[][] = [];
+  async testHatches() {
+    return this.testHatchesFound.shift() ?? [];
+  }
   async typecheckTests() {
     return this.testTypes;
   }
@@ -576,6 +580,17 @@ describe("test writing checks", () => {
     const task = await newTask();
     expect((await drive(task.id)).at(-1)).toBe("escalated");
     expect((await get(task.id)).context.escalation).toMatch(/pass before the change/);
+  });
+
+  it("sends escape hatches in new tests back to the test writer before it locks them", async () => {
+    fakes.testHatchesFound = [["1 more `lint disable`"]];
+    const task = await newTask();
+    const stages = await drive(task.id);
+    expect(stages.filter((s) => s === "test_writing")).toHaveLength(2);
+    expect(stages.at(-1)).toBe("done");
+    const second = fakes.calls.filter((c) => c.phase === "test writing")[1]!.prompt;
+    expect(second).toContain("1 more `lint disable`");
+    expect(second).toContain("do not turn off lint or type rules");
   });
 
   it("sends type faults in new tests back to the test writer, then escalates at the limit", async () => {

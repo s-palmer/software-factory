@@ -82,6 +82,8 @@ export interface Effects {
   diff(worktree: string): Promise<FileChange[]>;
   /** Lint, type check and tests, compared with the merge base. */
   gate(worktree: string, changes: FileChange[]): Promise<GateResult>;
+  /** Escape hatches (`any`, ts-ignore, lint-disable comments) these files add, compared with the merge base. */
+  testHatches(worktree: string, files: string[]): Promise<string[]>;
   /** Type check new test files, allowing "not yet implemented" errors. */
   typecheckTests(worktree: string, files: string[]): Promise<GateResult>;
   /**
@@ -511,6 +513,13 @@ export class Orchestrator {
     const missing = files.filter((f) => !this.effects.fileExists(worktree, f));
     if (files.length === 0 || missing.length > 0) {
       return this.escalate(task, `The test phase wrote no usable test files. Missing: ${missing.join(", ") || "all"}`);
+    }
+    // Implement cannot edit locked tests, and the gate rejects escape hatches, so a hatch in a test would fail every
+    // attempt from here on. Send it back now, while the test writer can still change the file.
+    const hatches = await this.effects.testHatches(worktree, files);
+    if (hatches.length > 0) {
+      const reason = `The new tests add escape hatches (${hatches.join(", ")}). Implement cannot edit locked tests and the gate rejects them, so remove them: type the values, and do not turn off lint or type rules.`;
+      return this.fail(task, "test_writing", "The new tests add escape hatches", [reason]);
     }
     // Implement cannot edit locked tests, so type faults in them must be fixed now.
     const types = await this.effects.typecheckTests(worktree, files);

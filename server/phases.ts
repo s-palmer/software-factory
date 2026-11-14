@@ -405,7 +405,7 @@ const PROMPTS: Record<AgentStage, (task: Task, ctx: PhaseContext) => string> = {
   },
   test_writing: (task, ctx) => {
     const d = docPaths(task);
-    return `# Phase: test writing\n\nRead \`${d.tasks}\`. Write tests that fail now and pass once the change is made. Do not change production code. Return the test file paths from the repository root.\n\nThe factory type-checks your tests (errors for code that does not exist yet are allowed), runs them to confirm they fail, then locks them. If no useful unit test exists for this change, return no files and say why in \`noTestsReason\`.\n\n${ticket(task, ctx)}`;
+    return `# Phase: test writing\n\nRead \`${d.tasks}\`. Write tests that fail now and pass once the change is made. Do not change production code. Return the test file paths from the repository root.\n\nThe factory type-checks your tests (errors for code that does not exist yet are allowed), runs them to confirm they fail, then locks them. After that nobody can change them, so add no escape hatches: no \`any\`, no \`@ts-ignore\` or \`@ts-expect-error\`, and no lint-disable comments, in test files or helpers. The factory sends tests with any of these back to you. If no useful unit test exists for this change, return no files and say why in \`noTestsReason\`.\n\n${ticket(task, ctx)}`;
   },
   implementing: (task, ctx) => {
     const d = docPaths(task);

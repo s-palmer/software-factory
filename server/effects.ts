@@ -445,6 +445,18 @@ export function createEffects(config: EffectsConfig): Effects {
       return { ok: steps.every((s) => s.ok), steps } satisfies GateResult;
     },
 
+    async testHatches(worktree, files) {
+      const mb = await mergeBase(worktree);
+      let diff = "";
+      for (const file of files) {
+        // A file git does not know yet is all new lines; a known one is compared with the merge base.
+        const known = (await run(["git", "ls-files", "--error-unmatch", "--", file], worktree)).code === 0;
+        if (known) diff += `${await must(["git", "diff", mb, "--", file], worktree)}\n`;
+        else if (existsSync(join(worktree, file))) diff += readFileSync(join(worktree, file), "utf8").split("\n").map((l) => `+${l}`).join("\n") + "\n";
+      }
+      return addedHatches(diff);
+    },
+
     async typecheckTests(worktree, files) {
       const types = await typeErrors(worktree);
       if (types.ok) return { ok: true, steps: [{ name: "typecheck", ok: true, output: "" }] };
