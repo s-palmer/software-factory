@@ -20,7 +20,7 @@ flowchart LR
     F -- "sees the merge: task done" --> GH
 ```
 
-1. **You give the factory work** as GitHub issue numbers, with what each one waits for.
+1. **You give the factory work** as ticket keys (GitHub issues like `#12`, or Jira and Linear keys like `PROJ-12`), with what each one waits for.
 2. **The factory builds each issue on its own**: scope, design, tests, implement, review, browser check, PR. Every phase is a headless agent with its own model; plain code checks every result. Agents' questions go to a **decider agent**, never to a person.
 3. **The factory never merges.** It opens a **draft** PR, fixes failing CI and requested changes itself, and marks the PR **ready for review** with a `risk:low` or `risk:high` label once CI is green.
 4. **Your merge agent merges** ready PRs. If a PR conflicts with the base, it asks the factory to move the change onto the base (`factory sync`), and the factory resolves the conflicts with its own agents and gate.
@@ -62,7 +62,7 @@ factory load-plan plan.tickets.json                     # many issues with their
 - **One task per issue.** A second `add` for the same issue exits 4 and returns the existing task id (`taskId`), so adding is safe to retry.
 - **Blockers** (`--after`, repeatable) take an issue number or a task id, and must already exist as tasks (exit 2 otherwise). A task starts only when every blocker is **done** (merged). A blocker that escalated keeps its dependents waiting.
 - **Give blockers in the same call.** The loop can start a task the moment it exists.
-- The issue is the spec for the task: the scoping agent reads it with `gh issue view`, so write acceptance criteria in the issue. The task takes the issue's title once scoping has read it.
+- The ticket is the spec for the task, so write acceptance criteria in it. A GitHub issue is read by the factory and given to every agent; a Jira or Linear ticket is read by the agents through the tracker's MCP server. The task takes the ticket's title once scoping has read it. Keys are checked against the tracker (`#12` for GitHub, `keyPattern` otherwise; exit 2 when wrong).
 - **Models** (optional): `--phase implementing=claude-sonnet-5-5` overrides one phase for this task. Defaults: Fable for scoping, design, review and the decider; Opus for tests, implement, browser check and PR text. `factory defaults` shows and sets them factory-wide.
 
 The plan file format for `load-plan` (the same format the PM run writes):
@@ -194,6 +194,8 @@ The CLI is a thin wrapper; agents may call the API directly with the same rules.
 | GET, POST | `/api/notifications` | `notifications`, `notify` |
 | GET | `/api/agent-runs`, `/api/agent-runs/:id` | |
 | GET | `/api/policy` | `policy` |
+| GET | `/api/env` | `env` |
+| POST | `/api/env/start`, `/api/env/stop` | `env-start`, `env-stop` (people only, exit 5 for agents) |
 
 ## Optional: the factory's own PM and conductor
 

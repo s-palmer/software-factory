@@ -247,6 +247,20 @@ export function createEffects(config: EffectsConfig): Effects {
         }
       }
     },
+    async portHolders() {
+      const ports = [...new Set(config.env.healthUrls.map((u) => Number(new URL(u).port || (u.startsWith("https") ? 443 : 80))))];
+      const holders: Array<{ port: number; pid: number; command: string }> = [];
+      for (const port of ports) {
+        // -F: one field per line, p<pid> then c<command>.
+        const r = await run(["lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], config.repo);
+        let pid = 0;
+        for (const line of r.stdout.split("\n")) {
+          if (line.startsWith("p")) pid = Number(line.slice(1));
+          else if (line.startsWith("c") && pid) holders.push({ port, pid, command: line.slice(1) });
+        }
+      }
+      return holders;
+    },
     logTail(logPath) {
       if (!existsSync(logPath)) return "(no log)";
       return readFileSync(logPath, "utf8").split("\n").slice(-config.env.logLines).join("\n");
@@ -257,7 +271,8 @@ export function createEffects(config: EffectsConfig): Effects {
     claude: (call, opts) => runClaude(call, { cwd: opts.cwd, runDir: opts.runDir, env: opts.env, command: config.claudeCommand }),
 
     async createWorktree(task: Task) {
-      const slug = (task.ticketKey ? `issue-${task.ticketKey.replace(/\D/g, "")}-` : "") + task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+      const key = task.ticketKey?.replace(/^#/, "issue-").replace(/[^A-Za-z0-9-]+/g, "-").toLowerCase();
+      const slug = (key ? `${key}-` : "") + task.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
       const branch = `factory/${slug || task.id.slice(0, 8)}-${task.id.slice(0, 6)}`;
       const root = join(config.home, "worktrees", task.id);
       await must(["git", "fetch", config.remote, config.base], config.repo);
@@ -273,6 +288,13 @@ export function createEffects(config: EffectsConfig): Effects {
     },
 
     fileExists: (worktree, path) => existsSync(join(worktree, path)),
+
+    async fetchIssue(cwd, key) {
+      const number = key.replace(/^#/, "");
+      const raw = await must(["gh", "issue", "view", number, "--json", "title,body,url,comments"], cwd);
+      const issue = JSON.parse(raw) as { title: string; body: string; url: string; comments?: Array<{ author?: { login?: string }; body: string }> };
+      return { title: issue.title, body: issue.body, url: issue.url, comments: (issue.comments ?? []).map((c) => `${c.author?.login ?? "someone"}: ${c.body}`) };
+    },
 
     async diff(worktree) {
       await must(["git", "add", "-A", "."], worktree);

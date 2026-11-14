@@ -1,4 +1,4 @@
-import type { CreateTaskInput, DefaultModels, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
+import type { CreateTaskInput, DefaultModels, EnvStatus, Feedback, FeedbackInput, RunDetail, SetDefaultModelsInput, SetModelsInput, StartRunInput, Task, TaskDetail, TaskSummary, TestRun } from "../../shared/api";
 import type { RiskPolicy } from "../../shared/risk";
 
 /** The orchestrator loop. `available: false` when the server runs without one (e.g. tests). */
@@ -15,6 +15,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const body = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`);
   return body as T;
+}
+
+async function envAction(action: "start" | "stop"): Promise<{ ok: boolean; message: string }> {
+  const res = await fetch(`/api/env/${action}`, { method: "POST" });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; message?: string; error?: string };
+  return { ok: res.ok && body.ok === true, message: body.message ?? body.error ?? `Request failed (${res.status})` };
 }
 
 export const api = {
@@ -34,6 +40,10 @@ export const api = {
   getOrchestrator: () => request<OrchestratorState>("/api/orchestrator"),
   setOrchestrator: (running: boolean) => request<OrchestratorState>("/api/orchestrator", { method: "PUT", body: JSON.stringify({ running }) }),
   getPolicy: () => request<RiskPolicy>("/api/policy"),
+  getEnv: () => request<EnvStatus>("/api/env"),
+  // A refused start or stop (409) still carries a message for the page.
+  startEnv: () => envAction("start"),
+  stopEnv: () => envAction("stop"),
   listRuns: () => request<TestRun[]>("/api/runs"),
   getRun: (id: string) => request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`),
   startRun: (input: StartRunInput = {}) => request<TestRun>("/api/runs", { method: "POST", body: JSON.stringify(input) }),

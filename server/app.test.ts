@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Feedback, Learning, Task, TaskDetail, TaskSummary } from "../shared/api";
+import type { EnvStatus, Feedback, Learning, Task, TaskDetail, TaskSummary } from "../shared/api";
 import { createApp } from "./app";
 import { FactoryDb } from "./db";
+import { LocalEnv } from "./environment";
 
 let db: FactoryDb;
 let app: ReturnType<typeof createApp>;
@@ -192,6 +193,80 @@ describe("tickets", () => {
     const res = await post("/api/tasks", { title: "again", ticketKey: "#3" });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ taskId: first.id });
+  });
+});
+
+describe("ticket keys", () => {
+  it("normalises GitHub issue numbers and refuses other keys", async () => {
+    const task = (await (await post("/api/tasks", { ticketKey: "12" })).json()) as Task;
+    expect(task).toMatchObject({ ticketKey: "#12", title: "#12" });
+    expect((await post("/api/tasks", { ticketKey: "LI-1" })).status).toBe(400);
+  });
+
+  it("checks keys against an MCP tracker's pattern, and turns off the GitHub-only PM run", async () => {
+    app = createApp(db, { tracker: { type: "mcp", name: "jira", label: "Jira", server: {}, tools: "*", keyPattern: "^[A-Z]+-\\d+$", instructions: "x" } });
+    expect(await (await post("/api/tasks", { ticketKey: "LI-1" })).json()).toMatchObject({ ticketKey: "LI-1" });
+    expect(await (await post("/api/tasks", { ticketKey: "#3" })).json()).toMatchObject({ error: expect.stringContaining("not a Jira ticket key") });
+    const plan = await post("/api/plans", { source: "#3" });
+    expect(plan.status).toBe(409);
+  });
+});
+
+describe("local environment", () => {
+  function fakeEnv(up = false) {
+    const started: string[] = [];
+    const stopped: number[] = [];
+    return {
+      started,
+      stopped,
+      controller: {
+        start: (dir: string) => (started.push(dir), 777),
+        isUp: async () => up,
+        isRunning: () => true,
+        stop: async (pid: number) => void stopped.push(pid),
+        logTail: () => "listening on 5173",
+        portHolders: async () => [{ port: 5173, pid: 99, command: "node" }],
+      },
+    };
+  }
+  const envConfig = { command: "pnpm dev", url: "http://localhost:5173", healthUrls: ["http://localhost:5173"], checkout: "/code/app", artifactRoot: "/tmp/factory-env-test" };
+  const human = (path: string) => app.request(path, { method: "POST" });
+
+  it("shows which task holds it and who waits", async () => {
+    const env = fakeEnv(true);
+    app = createApp(db, { env: new LocalEnv(db, env.controller, envConfig) });
+    const holder = await db.createTask({ title: "Paginate", description: "", ticketKey: "#4" }, "browser_check");
+    const waiter = await db.createTask({ title: "Sort", description: "" }, "browser_check");
+    await db.updateTask(waiter.id, { context: { envWait: "Another task is using the local app." } });
+    await db.acquireLease("env", holder.id, null);
+    await db.updateLeasePid("env", 4242, "/logs/env.log");
+    const s = (await (await app.request("/api/env")).json()) as EnvStatus;
+    expect(s).toMatchObject({ configured: true, up: true, external: false, log: "listening on 5173" });
+    expect(s.lease).toMatchObject({ holder: "task", taskId: holder.id, ticketKey: "#4", title: "Paginate", pid: 4242, status: "browser_check" });
+    expect(s.waiting).toEqual([{ taskId: waiter.id, ticketKey: null, title: "Sort", reason: "Another task is using the local app." }]);
+    expect((await human("/api/env/stop")).status).toBe(409);
+    expect(env.stopped).toEqual([]);
+  });
+
+  it("names the outside process when the factory did not start the app", async () => {
+    app = createApp(db, { env: new LocalEnv(db, fakeEnv(true).controller, envConfig) });
+    const s = (await (await app.request("/api/env")).json()) as EnvStatus;
+    expect(s).toMatchObject({ external: true, lease: null, portHolders: [{ port: 5173, pid: 99, command: "node" }] });
+    expect(await (await human("/api/env/start")).json()).toMatchObject({ ok: false, message: expect.stringContaining("outside the factory") });
+  });
+
+  it("lets a person start and stop a copy from the checkout, but not an agent", async () => {
+    const env = fakeEnv(false);
+    app = createApp(db, { env: new LocalEnv(db, env.controller, envConfig) });
+    const asAgent = await app.request("/api/env/start", { method: "POST", headers: { "x-factory-actor": "agent:pm" } });
+    expect(asAgent.status).toBe(403);
+    expect((await human("/api/env/start")).status).toBe(200);
+    expect(env.started).toEqual(["/code/app"]);
+    expect(await db.getLease("env")).toMatchObject({ taskId: null, pid: 777 });
+    expect((await human("/api/env/start")).status).toBe(409);
+    expect((await human("/api/env/stop")).status).toBe(200);
+    expect(env.stopped).toEqual([777]);
+    expect(await db.getLease("env")).toBeNull();
   });
 });
 

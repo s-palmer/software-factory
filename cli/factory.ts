@@ -9,7 +9,7 @@
  */
 import { parseArgs } from "node:util";
 import { ACTOR_HEADER, ActorSchema } from "../shared/actor";
-import type { DefaultModels, Learning, RunDetail, Task, TaskDetail, TaskSummary, TestRun } from "../shared/api";
+import type { DefaultModels, EnvStatus, Learning, RunDetail, Task, TaskDetail, TaskSummary, TestRun } from "../shared/api";
 import { AWAITING_HUMAN, TASK_STATUSES, type TaskStatus } from "../shared/lifecycle";
 import { modelPlan, PHASES, type Phase } from "../shared/models";
 
@@ -427,6 +427,46 @@ export const COMMANDS: Record<string, Command> = {
       return { data: learnings, text };
     },
   },
+  env: {
+    usage: "env",
+    summary: "The local environment for the browser check: who holds it, who waits, the end of its log",
+    args: 0,
+    run: async ({ api }) => {
+      const s = await api<EnvStatus>("GET", "/api/env");
+      const holder = !s.lease
+        ? s.external
+          ? `running outside the factory${s.portHolders.length ? `: ${s.portHolders.map((p) => `${p.command} (pid ${p.pid}, port ${p.port})`).join(", ")}` : ""}`
+          : "free"
+        : s.lease.holder === "task"
+          ? `held by task ${s.lease.taskId}${s.lease.ticketKey ? ` (${s.lease.ticketKey})` : ""} ${s.lease.title ?? ""}, since ${s.lease.acquiredAt}`
+          : `held by a person since ${s.lease.acquiredAt}`;
+      const lines = [
+        `${s.up ? "up" : "down"}, ${holder}`,
+        `start: ${s.command ?? "(none: set app.start in factory.config.json)"}  url: ${s.url}`,
+        ...s.waiting.map((w) => `waiting: ${w.taskId} ${w.ticketKey ?? ""} ${w.title}: ${w.reason}`),
+        ...(s.log ? ["", s.log] : []),
+      ];
+      return { data: s, text: lines.join("\n") };
+    },
+  },
+  "env-start": {
+    usage: "env-start",
+    summary: "Start the app from the repository checkout, for a person (not while a task holds it)",
+    args: 0,
+    run: async ({ api }) => {
+      const r = await api<{ ok: boolean; message: string }>("POST", "/api/env/start");
+      return { data: r, text: r.message };
+    },
+  },
+  "env-stop": {
+    usage: "env-stop",
+    summary: "Stop the app a person started",
+    args: 0,
+    run: async ({ api }) => {
+      const r = await api<{ ok: boolean; message: string }>("POST", "/api/env/stop");
+      return { data: r, text: r.message };
+    },
+  },
   policy: {
     usage: "policy",
     summary: "The risk policy: what always needs a person",
@@ -443,7 +483,7 @@ export function helpText(): string {
   return [
     "Usage: factory <command> [options]",
     "",
-    table([["  factory init [--force]", "Set up the repository in this folder: write factory.config.json and check what is missing"], ...rows]),
+    table([["  factory init [--yes] [--tracker github|jira|linear] [--repo <dir>] [--force]", "Set up a repository: ask a few questions, write factory.config.json, check what is missing"], ...rows]),
     "",
     "Options for every command:",
     "  --json            print one JSON document (also for errors)",

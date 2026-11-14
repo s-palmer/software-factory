@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_FILE, ProjectConfig } from "../shared/config";
+import { CONFIG_FILE, ProjectConfig, type TrackerConfig } from "../shared/config";
 import { RiskPolicy } from "../shared/risk";
 import type { EffectsConfig } from "./effects";
 import type { OrchestratorConfig } from "./orchestrator";
@@ -29,7 +29,10 @@ export interface FactoryConfig {
   autostart: boolean;
   /** Where the project settings came from, or null when the file does not exist. */
   configFile: string | null;
+  /** The database file. */
+  db: string;
   policy: RiskPolicy;
+  tracker: TrackerConfig;
   /** The Chromium the browser check uses. The server refuses to start the loop when it is missing. */
   chromium: string;
   effects: EffectsConfig;
@@ -55,12 +58,27 @@ export function chromiumPath(): string {
   return chromium.executablePath();
 }
 
-export function loadConfig(env: Env = process.env, cwd = process.cwd()): FactoryConfig {
+/**
+ * Where the factory keeps its state for one target repository: outside both repositories, so a branch change,
+ * `git clean` or a second target never touches it. `~/.factory/<repo name>/` holds the database, the artifacts
+ * and the task worktrees.
+ */
+export function factoryPaths(env: Env = process.env, cwd = process.cwd()): { repo: string; home: string; db: string; artifacts: string } {
   const repo = resolve(env.FACTORY_REPO ?? execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim());
+  const home = resolve(env.FACTORY_HOME ?? join(homedir(), ".factory", basename(repo)));
+  return {
+    repo,
+    home,
+    db: env.FACTORY_DB === ":memory:" ? ":memory:" : resolve(cwd, env.FACTORY_DB ?? join(home, "factory.duckdb")),
+    artifacts: resolve(cwd, env.FACTORY_ARTIFACTS ?? join(home, "artifacts")),
+  };
+}
+
+export function loadConfig(env: Env = process.env, cwd = process.cwd()): FactoryConfig {
+  const { repo, home, db, artifacts } = factoryPaths(env, cwd);
   const { file, config: project } = readProjectConfig(repo);
   // Fail fast on an invalid policy file: a typo must never silently loosen what needs a person.
   const policy = env.FACTORY_POLICY ? RiskPolicy.parse(JSON.parse(readFileSync(env.FACTORY_POLICY, "utf8"))) : project.policy;
-  const home = resolve(env.FACTORY_HOME ?? join(homedir(), ".factory", basename(repo)));
 
   const browserLibs = env.FACTORY_BROWSER_LIBS ?? join(homedir(), ".local/share/factory/chromium-libs");
   const libPath = [join(browserLibs, "usr/lib/x86_64-linux-gnu"), join(browserLibs, "lib/x86_64-linux-gnu")].filter(existsSync).join(":");
@@ -85,7 +103,9 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
     enabled: env.FACTORY_ORCHESTRATOR !== "0",
     autostart: env.FACTORY_AUTOSTART === "1",
     configFile: file,
+    db,
     policy,
+    tracker: project.tracker,
     chromium,
     effects: {
       repo,
@@ -106,13 +126,15 @@ export function loadConfig(env: Env = process.env, cwd = process.cwd()): Factory
       },
     },
     orchestrator: {
-      artifactRoot: resolve(cwd, env.FACTORY_ARTIFACTS ?? "artifacts"),
+      artifactRoot: artifacts,
       maxAttempts: num(env.FACTORY_MAX_ATTEMPTS, project.maxAttempts),
       guardScript: fileURLToPath(new URL("./guard.mjs", import.meta.url)),
       envStartTimeoutMs: num(env.FACTORY_ENV_START_TIMEOUT_MS, project.app.startTimeoutMs),
       browserBaseUrl: env.FACTORY_BROWSER_URL ?? project.app.url,
       browserMcp,
       skillsDir: SKILLS_DIR,
+      tracker: project.tracker.type === "mcp" ? project.tracker : undefined,
+      isolation: { repo, home, skillsDir: SKILLS_DIR, allowedDomains: project.sandbox.allowedDomains, allowRead: project.sandbox.allowRead },
       // The agents may run the checks themselves, but never install packages or start the app.
       tools: { run: [commands.lint, commands.typecheck, commands.test].filter((c): c is string => !!c), deny: [commands.install, commands.sync, ...(start ? [start] : [])] },
       tickMs: num(env.FACTORY_TICK_MS, 5000),

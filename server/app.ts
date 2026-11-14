@@ -10,8 +10,15 @@ import type { Planner } from "./planning/pm";
 import { RunBusyError, type TestRunner } from "./runner";
 
 /** `orchestrator` is optional: without it the API still serves tasks, and the loop routes answer 503. */
-export function createApp(db: FactoryDb, opts: { runner?: TestRunner; policy?: RiskPolicy; orchestrator?: Orchestrator; planner?: Planner } = {}) {
-  const { runner, policy, orchestrator, planner } = opts;
+import { normalizeTicketKey, type TrackerConfig } from "../shared/config";
+import type { LocalEnv } from "./environment";
+
+export function createApp(
+  db: FactoryDb,
+  opts: { runner?: TestRunner; policy?: RiskPolicy; orchestrator?: Orchestrator; planner?: Planner; tracker?: TrackerConfig; env?: LocalEnv } = {},
+) {
+  const { runner, policy, orchestrator, planner, env } = opts;
+  const tracker = opts.tracker ?? { type: "github" as const };
   const app = new Hono<{ Variables: { actor: Actor } }>();
 
   app.onError((err, c) => {
@@ -34,8 +41,15 @@ export function createApp(db: FactoryDb, opts: { runner?: TestRunner; policy?: R
   app.post("/api/tasks", async (c) => {
     const parsed = CreateTaskInput.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
+    const input = parsed.data;
+    if (input.ticketKey) {
+      const key = normalizeTicketKey(tracker, input.ticketKey);
+      if (!key.ok) return c.json({ error: key.error }, 400);
+      if (input.title === input.ticketKey) input.title = key.key;
+      input.ticketKey = key.key;
+    }
     try {
-      return c.json(await db.createTask(parsed.data, "backlog", c.get("actor")), 201);
+      return c.json(await db.createTask(input, "backlog", c.get("actor")), 201);
     } catch (err) {
       if (err instanceof DuplicateTicketError) return c.json({ error: err.message, taskId: err.taskId }, 409);
       if (err instanceof UnknownBlockerError) return c.json({ error: err.message }, 400);
@@ -132,11 +146,23 @@ export function createApp(db: FactoryDb, opts: { runner?: TestRunner; policy?: R
 
   /** Start a PM run on an intake issue or a draft spec. Returns at once; the plan runs in the background. */
   app.post("/api/plans", async (c) => {
+    if (tracker.type !== "github") return c.json({ error: `The PM run files GitHub issues, so it is off when tickets live in ${tracker.label}` }, 409);
     if (!planner) return c.json({ error: "The planner is not configured on this server" }, 503);
     const parsed = StartPlanInput.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, 400);
     const id = await planner.start(parsed.data.source, c.get("actor"));
     return c.json({ id, status: "running" }, 202);
+  });
+
+  /** The local environment for the browser check: who holds it, and a person's start and stop. */
+  app.get("/api/env", async (c) => (env ? c.json(await env.status()) : c.json({ error: "The orchestrator is not configured on this server" }, 503)));
+
+  app.post("/api/env/:action{start|stop}", async (c) => {
+    if (!env) return c.json({ error: "The orchestrator is not configured on this server" }, 503);
+    const actor = c.get("actor");
+    if (isAgent(actor)) return c.json({ error: `${actor} may not start or stop the local environment; only a person can` }, 403);
+    const result = c.req.param("action") === "start" ? await env.start() : await env.stop();
+    return c.json(result, result.ok ? 200 : 409);
   });
 
   /** A merge agent asks the factory to move a PR's change onto the latest base and resolve conflicts. */

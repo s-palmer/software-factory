@@ -28,6 +28,66 @@ export interface PhaseContext {
   tools?: ToolRules | undefined;
   /** Where the phase skills live. Default: this install's `.claude/skills`. */
   skillsDir?: string | undefined;
+  /** A ticket system behind MCP. Without it, the ticket is a GitHub issue the factory already read. */
+  tracker?: PhaseTracker | undefined;
+  /** What the run may touch. Without it, a run gets only the fixed denies (tests of prompt building). */
+  isolation?: Isolation | undefined;
+}
+
+export type PhaseTracker = { label: string; name: string; server: Record<string, unknown>; tools: string[] | "*"; instructions: string };
+
+/**
+ * The run's limits. File tools may not leave the working folders (the run's cwd and `--add-dir`). Shell commands,
+ * and every process they start (a test runner running code the agent wrote), run in Claude Code's OS sandbox:
+ * no reads of `denyRead` (the factory's state, other worktrees, the repository checkout, credentials) except
+ * `allowRead`, writes only in the cwd and the temp folder, and network only to `allowedDomains`.
+ */
+export type Isolation = { allowRead: string[]; denyRead: string[]; denyWrite: string[]; allowedDomains: string[] };
+
+/** Credential folders no run may read, also outside the sandbox (the Read tool follows permission rules only). */
+export const SECRET_PATHS = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gh", "~/.docker", "~/.kube", "~/.netrc", "~/.npmrc", "~/.claude.json", "~/.claude"];
+
+export function isolationSettings(iso: Isolation): object {
+  const rule = (p: string) => (p.startsWith("~/") ? p : `/${p}`);
+  return {
+    permissions: {
+      blockReadsOutsideWorkingDirectories: true,
+      blockWritesOutsideWorkingDirectories: true,
+      // Only the credential folders: a deny rule also refuses shell commands that touch the path, and the worktree
+      // lies inside the denied folders. The file tools stay in the working folders through the two block keys.
+      deny: SECRET_PATHS.flatMap((p) => [`Read(${rule(p)}/**)`, `Edit(${rule(p)}/**)`]),
+    },
+    sandbox: {
+      enabled: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: [...SECRET_PATHS, ...iso.denyRead], allowRead: iso.allowRead, denyWrite: iso.denyWrite },
+      network: { allowedDomains: iso.allowedDomains },
+    },
+  };
+}
+
+/** Deep-merges Claude Code settings objects; arrays are joined. */
+export function mergeSettings(...parts: Array<object | undefined>): object | undefined {
+  const defined = parts.filter((p): p is object => p !== undefined);
+  if (defined.length === 0) return undefined;
+  const merge = (a: unknown, b: unknown): unknown => {
+    if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
+    if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
+      const out: Record<string, unknown> = { ...(a as Record<string, unknown>) };
+      for (const [k, v] of Object.entries(b)) out[k] = k in out ? merge(out[k], v) : v;
+      return out;
+    }
+    return b;
+  };
+  return defined.reduce((acc, p) => merge(acc, p) as object);
+}
+
+/** The tracker's MCP server and its read tools, for every run that reads the ticket. */
+function trackerAccess(ctx: PhaseContext): { tools: string[]; servers: Record<string, unknown> } {
+  const t = ctx.tracker;
+  if (!t) return { tools: [], servers: {} };
+  return { tools: t.tools === "*" ? [`mcp__${t.name}`] : t.tools.map((tool) => `mcp__${t.name}__${tool}`), servers: { [t.name]: t.server } };
 }
 
 export type ToolRules = { run: string[]; deny: string[] };
@@ -54,7 +114,7 @@ export const BUDGETS: Record<Phase, number> = {
   conductor: 1.5,
 };
 
-const READ = ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git status:*)", "Bash(git show:*)", "Bash(gh issue view:*)"];
+const READ = ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git status:*)", "Bash(git show:*)"];
 const WRITE_DOCS = ["Write(docs/designs/**)", "Edit(docs/designs/**)"];
 /** Read, write, and run the project's own checks (each command and anything after it, such as a file path). */
 function codeTools(tools: ToolRules): string[] {
@@ -75,12 +135,8 @@ const FIXED_DENY = [
   "Bash(git switch:*)",
   "Bash(git rebase:*)",
   "Bash(git -C:*)",
-  "Bash(gh pr:*)",
-  "Bash(gh api:*)",
-  "Bash(gh issue create:*)",
-  "Bash(gh issue edit:*)",
-  "Bash(gh issue close:*)",
-  "Bash(gh issue comment:*)",
+  // The factory does every GitHub call itself, and reads GitHub issues for the agents.
+  "Bash(gh:*)",
   // Adding packages is the factory's job (and a high-risk change), for every package manager.
   "Bash(pnpm add:*)",
   "Bash(pnpm install:*)",
@@ -146,7 +202,8 @@ export const SCHEMAS = {
 } as const;
 
 function slug(task: Task): string {
-  const base = task.ticketKey ? `issue-${task.ticketKey.replace(/\D/g, "")}` : task.title;
+  // "#42" (a GitHub issue) gives issue-42; "PROJ-12" gives proj-12.
+  const base = task.ticketKey ? task.ticketKey.replace(/^#/, "issue-") : task.title;
   return base.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || task.id.slice(0, 8);
 }
 
@@ -155,9 +212,14 @@ export const docPaths = (task: Task) => ({
   tasks: `docs/designs/${slug(task)}-tasks.md`,
 });
 
-function ticket(task: Task): string {
-  const issue = task.ticketKey ? `GitHub issue ${task.ticketKey}. Read it with \`gh issue view ${task.ticketKey.replace(/\D/g, "")}\`.\n` : "";
-  return `## The ticket\n\n${issue}Title: ${task.title}\n${task.description ? `\n${task.description}\n` : ""}`;
+function ticket(task: Task, ctx: PhaseContext): string {
+  const t = task.context?.ticket;
+  if (t) {
+    const comments = t.comments.length ? `\n### Comments\n\n${t.comments.map((c) => `- ${c.replace(/\n/g, "\n  ")}`).join("\n")}\n` : "";
+    return `## The ticket\n\nGitHub issue ${task.ticketKey} (${t.url}). Title: ${t.title}\n\n${t.body || "(no description)"}\n${comments}${task.description ? `\n### Notes from the person who added the task\n\n${task.description}\n` : ""}`;
+  }
+  const where = task.ticketKey && ctx.tracker ? `${ctx.tracker.label} ticket ${task.ticketKey}. ${ctx.tracker.instructions}\n` : "";
+  return `## The ticket\n\n${where}Title: ${task.title}\n${task.description ? `\n${task.description}\n` : ""}`;
 }
 
 function feedbackBlock(feedback: string[]): string {
@@ -189,7 +251,7 @@ export const PHASE_SKILLS: Record<AgentStage, string[]> = {
 const skillsDir = (ctx: PhaseContext) => ctx.skillsDir ?? DEFAULT_SKILLS_DIR;
 
 const TRACKER =
-  "Where a skill mentions the issue tracker or `/setup-matt-pocock-skills`: the ticket is the GitHub issue below, read with `gh issue view`. The factory does every tracker write (issues, labels, comments).";
+  "Where a skill mentions the issue tracker or `/setup-matt-pocock-skills`: the ticket is the one below. Do not write to the tracker or to GitHub; the factory does every write (issues, labels, comments, pull requests).";
 
 function overrides(stage: AgentStage, task: Task, ctx: PhaseContext): string[] {
   const d = docPaths(task);
@@ -250,30 +312,30 @@ function howToWork(stage: AgentStage, task: Task, ctx: PhaseContext): string {
 }
 
 const PROMPTS: Record<AgentStage, (task: Task, ctx: PhaseContext) => string> = {
-  scoping: (task) => {
+  scoping: (task, ctx) => {
     const d = docPaths(task);
-    return `# Phase: scoping\n\nTurn the ticket into a solution doc with testable acceptance criteria. Write it to \`${d.solution}\`. The factory already checked that no open pull request or commit on the base branch covers this ticket.\n\nIf the ticket leaves something open that the code and the repository docs do not settle, list it in \`questions\`. Set \`needsBrowser\` when the change has a visible effect in the app. Do not propose ticket changes; put suggested wording in the solution doc.\n\n${ticket(task)}`;
+    return `# Phase: scoping\n\nTurn the ticket into a solution doc with testable acceptance criteria. Write it to \`${d.solution}\`. The factory already checked that no open pull request or commit on the base branch covers this ticket.\n\nIf the ticket leaves something open that the code and the repository docs do not settle, list it in \`questions\`. Set \`needsBrowser\` when the change has a visible effect in the app. Do not propose ticket changes; put suggested wording in the solution doc.\n\n${ticket(task, ctx)}`;
   },
-  design: (task) => {
+  design: (task, ctx) => {
     const d = docPaths(task);
-    return `# Phase: design\n\nRead the solution doc \`${d.solution}\`. Decide how to build it and write the task list to \`${d.tasks}\`: files to change, types, the tests to write.\n\nIf the change is visible, write a browser plan: one entry per acceptance criterion, with the page path and the steps to reach the state to check. Use pages and data that exist in the local app.\n\n${ticket(task)}`;
+    return `# Phase: design\n\nRead the solution doc \`${d.solution}\`. Decide how to build it and write the task list to \`${d.tasks}\`: files to change, types, the tests to write.\n\nIf the change is visible, write a browser plan: one entry per acceptance criterion, with the page path and the steps to reach the state to check. Use pages and data that exist in the local app.\n\n${ticket(task, ctx)}`;
   },
-  test_writing: (task) => {
+  test_writing: (task, ctx) => {
     const d = docPaths(task);
-    return `# Phase: test writing\n\nRead \`${d.tasks}\`. Write tests that fail now and pass once the change is made. Do not change production code. Return the test file paths from the repository root.\n\nThe factory type-checks your tests (errors for code that does not exist yet are allowed), runs them to confirm they fail, then locks them. If no useful unit test exists for this change, return no files and say why in \`noTestsReason\`.\n\n${ticket(task)}`;
+    return `# Phase: test writing\n\nRead \`${d.tasks}\`. Write tests that fail now and pass once the change is made. Do not change production code. Return the test file paths from the repository root.\n\nThe factory type-checks your tests (errors for code that does not exist yet are allowed), runs them to confirm they fail, then locks them. If no useful unit test exists for this change, return no files and say why in \`noTestsReason\`.\n\n${ticket(task, ctx)}`;
   },
-  implementing: (task) => {
+  implementing: (task, ctx) => {
     const d = docPaths(task);
-    return `# Phase: implement\n\nMake the locked tests pass and finish the task list in \`${d.tasks}\`. Run the tests, the type checker and the linter yourself as you go; the factory runs them again afterwards against the merge base.\n\nIf a locked test is wrong in a way no correct implementation can pass, describe each problem in \`testFixes\` and stop. List work for a later ticket in \`followUps\`.\n\n${ticket(task)}`;
+    return `# Phase: implement\n\nMake the locked tests pass and finish the task list in \`${d.tasks}\`. Run the tests, the type checker and the linter yourself as you go; the factory runs them again afterwards against the merge base.\n\nIf a locked test is wrong in a way no correct implementation can pass, describe each problem in \`testFixes\` and stop. List work for a later ticket in \`followUps\`.\n\n${ticket(task, ctx)}`;
   },
-  reviewing: (task) =>
-    `# Phase: review\n\nYou can only read. Review the change against the base branch at its merge base (see How to work). Check correctness, integration risk and simplicity against the ticket and \`${docPaths(task).solution}\`.\n\nReturn \`approve\` with no blocking items, or \`request_changes\` with each blocking item as \`file:line\` and the problem. Style preferences are not blocking.\n\n${ticket(task)}`,
+  reviewing: (task, ctx) =>
+    `# Phase: review\n\nYou can only read. Review the change against the base branch at its merge base (see How to work). Check correctness, integration risk and simplicity against the ticket and \`${docPaths(task).solution}\`.\n\nReturn \`approve\` with no blocking items, or \`request_changes\` with each blocking item as \`file:line\` and the problem. Style preferences are not blocking.\n\n${ticket(task, ctx)}`,
   browser_check: (task, ctx) => {
     const plan = ctx.browserPlan.map((p, i) => `${i + 1}. ${p.criterion}\n   Page: ${p.path}\n   Steps: ${p.steps}`).join("\n");
-    return `# Phase: browser check\n\nThe app runs at ${ctx.browserUrl}. Check each acceptance criterion in the browser, following the plan. Explore only when a step fails.\n\nTake one screenshot per criterion and return its file name. Mark a criterion \`untestable\` when the local app lacks the role or data it needs, and name the test that covers it. Set \`blocked\` only when the app does not load or sign-in fails.\n\n## Plan\n\n${plan || "No plan: check the acceptance criteria in the solution doc."}\n\n${ticket(task)}`;
+    return `# Phase: browser check\n\nThe app runs at ${ctx.browserUrl}. Check each acceptance criterion in the browser, following the plan. Explore only when a step fails.\n\nTake one screenshot per criterion and return its file name. Mark a criterion \`untestable\` when the local app lacks the role or data it needs, and name the test that covers it. Set \`blocked\` only when the app does not load or sign-in fails.\n\n## Plan\n\n${plan || "No plan: check the acceptance criteria in the solution doc."}\n\n${ticket(task, ctx)}`;
   },
-  pr: (task) =>
-    `# Phase: pull request text\n\nWrite the pull request title and body for the change on this branch (read it against the merge base, see How to work). Explain what changed and why, and how it was checked. Do not add an attribution line; the factory adds its own footer.\n\n${ticket(task)}`,
+  pr: (task, ctx) =>
+    `# Phase: pull request text\n\nWrite the pull request title and body for the change on this branch (read it against the merge base, see How to work). Explain what changed and why, and how it was checked. Do not add an attribution line; the factory adds its own footer.\n\n${ticket(task, ctx)}`,
 };
 
 function stageTools(stage: AgentStage, tools: ToolRules): string[] {
@@ -293,15 +355,16 @@ function stageTools(stage: AgentStage, tools: ToolRules): string[] {
 
 export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): ClaudeCall {
   const prompt = PROMPTS[stage](task, ctx) + howToWork(stage, task, ctx) + lockedBlock(stage === "implementing" ? ctx.lockedFiles : []) + feedbackBlock(ctx.feedback);
+  const tracker = trackerAccess(ctx);
   return {
     prompt,
-    allowedTools: stageTools(stage, ctx.tools ?? DEFAULT_TOOLS),
+    allowedTools: [...stageTools(stage, ctx.tools ?? DEFAULT_TOOLS), ...tracker.tools],
     disallowedTools: denyTools(ctx.tools),
     addDirs: PHASE_SKILLS[stage].length > 0 ? [skillsDir(ctx)] : [],
-    mcpServers: stage === "browser_check" && ctx.browserMcp ? { playwright: ctx.browserMcp } : {},
+    mcpServers: { ...tracker.servers, ...(stage === "browser_check" && ctx.browserMcp ? { playwright: ctx.browserMcp } : {}) },
     outputSchema: SCHEMAS[stage],
     maxBudgetUsd: BUDGETS[stage],
-    settings: stage === "implementing" ? ctx.settings : undefined,
+    settings: mergeSettings(ctx.isolation && isolationSettings(ctx.isolation), stage === "implementing" ? ctx.settings : undefined),
     model: ctx.model,
   };
 }
@@ -311,12 +374,14 @@ export function phaseCall(stage: AgentStage, task: Task, ctx: PhaseContext): Cla
  * in the ticket, the code or the repo rules settles a question and a wrong answer would be costly to undo.
  */
 export function deciderCall(task: Task, ctx: PhaseContext, stage: AgentStage, questions: string[], summary: string): ClaudeCall {
-  const prompt = `# Phase: decider\n\nThe ${stage} phase stopped with questions. Answer each one so the work can continue without a person.\n\nRead the ticket, the solution doc (\`${docPaths(task).solution}\`, if it exists), the repository's docs and instructions files, and the existing code. Prefer the smallest change that meets the acceptance criteria. Give each answer with its reason.\n\nSet \`needsHuman\` only when nothing in the ticket, the code or the repository rules settles the question AND a wrong answer would cost more than one review round to undo: money, legal text, security, stored data.\n\n## The ${stage} phase's summary\n\n${summary || "(none)"}\n\n## Questions\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n\n${ticket(task)}`;
+  const prompt = `# Phase: decider\n\nThe ${stage} phase stopped with questions. Answer each one so the work can continue without a person.\n\nRead the ticket, the solution doc (\`${docPaths(task).solution}\`, if it exists), the repository's docs and instructions files, and the existing code. Prefer the smallest change that meets the acceptance criteria. Give each answer with its reason.\n\nSet \`needsHuman\` only when nothing in the ticket, the code or the repository rules settles the question AND a wrong answer would cost more than one review round to undo: money, legal text, security, stored data.\n\n## The ${stage} phase's summary\n\n${summary || "(none)"}\n\n## Questions\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n\n${ticket(task, ctx)}`;
+  const tracker = trackerAccess(ctx);
   return {
     prompt,
-    allowedTools: READ,
+    allowedTools: [...READ, ...tracker.tools],
     disallowedTools: denyTools(ctx.tools),
-    mcpServers: {},
+    mcpServers: tracker.servers,
+    settings: ctx.isolation && isolationSettings(ctx.isolation),
     outputSchema: SCHEMAS.decider,
     maxBudgetUsd: BUDGETS.decider,
     model: ctx.model,

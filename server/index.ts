@@ -1,9 +1,9 @@
 /**
- * Starts the factory API. Env: FACTORY_DB (default data/factory.duckdb), FACTORY_ARTIFACTS (default artifacts),
- * API_PORT (default 8787), FACTORY_TEST_COMMAND (default: pnpm exec playwright test).
+ * Starts the factory API. Env: FACTORY_DB and FACTORY_ARTIFACTS (default: under ~/.factory/<repo>, see
+ * server/config.ts), API_PORT (default 8787), FACTORY_TEST_COMMAND (default: pnpm exec playwright test).
  */
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { createApp } from "./app";
@@ -12,12 +12,16 @@ import { createEffects } from "./effects";
 import { Orchestrator } from "./orchestrator";
 import { ghTracker, Planner } from "./planning/pm";
 import { Conductor } from "./conductor";
+import { LocalEnv } from "./environment";
 import { FactoryDb } from "./db";
 import { TestRunner } from "./runner";
 
-const dbPath = process.env.FACTORY_DB ?? "data/factory.duckdb";
-const artifactDir = process.env.FACTORY_ARTIFACTS ?? "artifacts";
+// The project config (factory.config.json in the target repository). An invalid file stops the server.
+const config = loadConfig();
+const dbPath = config.db;
+const artifactDir = config.orchestrator.artifactRoot;
 const port = Number(process.env.API_PORT ?? 8787);
+mkdirSync(artifactDir, { recursive: true });
 
 if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
 const db = await FactoryDb.open(dbPath);
@@ -26,19 +30,25 @@ if (interrupted > 0) console.log(`marked ${interrupted} interrupted test run(s) 
 // FACTORY_TEST_COMMAND overrides the suite command (space-separated), e.g. for a fake runner in tests.
 const command = process.env.FACTORY_TEST_COMMAND?.split(" ").filter(Boolean);
 const runner = new TestRunner(db, { artifactRoot: artifactDir, command });
-// The project config (factory.config.json in the target repository). An invalid file stops the server.
-const config = loadConfig();
 const policy = config.policy;
 
 // The orchestrator: on by default, the loop paused until started (dashboard switch or `factory start`).
 let orchestrator: Orchestrator | undefined;
 let planner: Planner | undefined;
+let env: LocalEnv | undefined;
 if (config.enabled) {
   if (!existsSync(config.chromium)) {
     console.error(`Chromium for the browser check is missing at ${config.chromium}. Run: pnpm exec playwright install chromium`);
     process.exit(1);
   }
   const effects = createEffects(config.effects);
+  env = new LocalEnv(db, effects.env, {
+    command: config.effects.env.start ? config.effects.env.start.join(" ") : null,
+    url: config.orchestrator.browserBaseUrl,
+    healthUrls: config.effects.env.healthUrls,
+    checkout: join(config.effects.repo, config.effects.projectDir),
+    artifactRoot: config.orchestrator.artifactRoot,
+  });
   orchestrator = new Orchestrator(db, effects, { ...config.orchestrator, policy, baseBranch: config.effects.base });
   planner = new Planner(db, effects, ghTracker(config.effects.repo), {
     projectDir: config.effects.projectDir,
@@ -52,7 +62,8 @@ if (config.enabled) {
   const intake = planner;
   const loop = orchestrator;
   const intakeMs = Number(process.env.FACTORY_INTAKE_POLL_MS ?? 0);
-  if (intakeMs > 0) {
+  // Intake reads GitHub issues with a label, so it runs only when tickets are GitHub issues.
+  if (intakeMs > 0 && config.tracker.type === "github") {
     setInterval(() => {
       if (loop.running) intake.pollIntake().catch((error: unknown) => console.error("[factory] intake poll failed:", error));
     }, intakeMs).unref();
@@ -78,7 +89,7 @@ if (config.enabled) {
 } else {
   console.log("orchestrator off (FACTORY_ORCHESTRATOR=0)");
 }
-const app = createApp(db, { runner, policy, orchestrator, planner });
+const app = createApp(db, { runner, policy, orchestrator, planner, tracker: config.tracker, env });
 app.use("/artifacts/*", serveStatic({ root: artifactDir, rewriteRequestPath: (p) => p.replace(/^\/artifacts/, "") }));
 
 // Loopback only: the API has no auth of its own; reach it through the Vite proxy.

@@ -13,3 +13,4 @@ import "./AgentRunList.verify";
 import "./OrchestratorSwitch.verify";
 import "./TaskNotes.verify";
 import "./WaitingFor.verify";
+import "./EnvPanel.verify";

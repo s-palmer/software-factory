@@ -13,7 +13,8 @@ import { modelFor, type Phase } from "../shared/models";
 import { classifyRisk, type FileChange, type RiskPolicy } from "../shared/risk";
 import type { ClaudeCall, ClaudeResult } from "./claude";
 import type { FactoryDb } from "./db";
-import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type ToolRules } from "./phases";
+import { runIsolation, type IsolationConfig } from "./isolation";
+import { deciderCall, lockedFilesSettings, phaseCall, type AgentStage, type BrowserStep, type PhaseContext, type PhaseTracker, type ToolRules } from "./phases";
 
 export interface GateStep {
   name: string;
@@ -34,6 +35,8 @@ export interface EnvController {
   /** Stop the whole process group. */
   stop(pid: number): Promise<void>;
   logTail(logPath: string): string;
+  /** Processes listening on the health URLs' ports. */
+  portHolders?(): Promise<Array<{ port: number; pid: number; command: string }>>;
 }
 
 /** What the factory reads from an open pull request. */
@@ -52,6 +55,8 @@ export type PrStatus = {
 export interface Effects {
   claude(call: ClaudeCall, options: { cwd: string; runDir: string; env?: Record<string, string> }): Promise<ClaudeResult>;
   createWorktree(task: Task): Promise<{ branch: string; worktree: string }>;
+  /** A GitHub issue's text, for the prompts. */
+  fetchIssue(cwd: string, key: string): Promise<NonNullable<TaskContext["ticket"]>>;
   fileExists(worktree: string, path: string): boolean;
   /** Changes since the merge base with the base branch. */
   diff(worktree: string): Promise<FileChange[]>;
@@ -87,6 +92,10 @@ export interface OrchestratorConfig {
   tools?: ToolRules | undefined;
   /** The phase skills folder. */
   skillsDir?: string | undefined;
+  /** A ticket system behind MCP; without it, tickets are GitHub issues the factory reads. */
+  tracker?: PhaseTracker | undefined;
+  /** Without it, runs are not sandboxed (tests with fakes). */
+  isolation?: IsolationConfig | undefined;
   /** The branch PRs target, named in the review and PR prompts (default "main"). */
   baseBranch?: string;
   tickMs: number;
@@ -94,6 +103,9 @@ export interface OrchestratorConfig {
 }
 
 const ENV_LEASE = "env";
+
+/** Where `createWorktree` puts a task's worktree (its project folder may be below it). */
+export const worktreeRoot = (home: string, taskId: string) => join(home, "worktrees", taskId);
 
 const AGENT_STAGES: ReadonlySet<TaskStatus> = new Set(["scoping", "design", "test_writing", "implementing", "reviewing", "pr"]);
 
@@ -203,7 +215,9 @@ export class Orchestrator {
     const run = await this.db.startAgentRun(task.id, "backlog", "worktree");
     try {
       const { branch, worktree } = await this.effects.createWorktree(task);
-      await this.db.updateTask(task.id, { branch, worktree });
+      // A GitHub issue is read here, once, and goes into every prompt: agents get no GitHub access.
+      const ticket = !this.config.tracker && task.ticketKey ? await this.effects.fetchIssue(worktree, task.ticketKey) : undefined;
+      await this.db.updateTask(task.id, { branch, worktree, ...(ticket ? { context: { ticket } } : {}) });
       await this.db.finishAgentRun(run.id, { status: "passed", summary: `${branch} at ${worktree}` });
     } catch (error) {
       await this.db.finishAgentRun(run.id, { status: "error", summary: (error as Error).message.slice(0, 500) });
@@ -243,6 +257,8 @@ export class Orchestrator {
       baseBranch: this.config.baseBranch,
       tools: this.config.tools,
       skillsDir: this.config.skillsDir,
+      tracker: this.config.tracker,
+      isolation: this.config.isolation && task.worktree ? runIsolation(this.config.isolation, worktreeRoot(this.config.isolation.home, task.id)) : undefined,
       settings,
     };
     let result: ClaudeResult;
@@ -283,7 +299,7 @@ export class Orchestrator {
     switch (stage) {
       case "scoping": {
         // A task made from an issue number alone takes the issue's title. A typed title stays.
-        const title = String(output.title ?? "").trim();
+        const title = String(output.title ?? task.context.ticket?.title ?? "").trim();
         await this.db.updateTask(task.id, {
           ...(title && task.title === task.ticketKey ? { title } : {}),
           context: { needsBrowser: Boolean(output.needsBrowser), questions: [], feedback: questions.length ? (await this.db.getTask(task.id))!.context.feedback : [] },
@@ -428,7 +444,7 @@ export class Orchestrator {
       const logPath = join(this.config.artifactRoot, "tasks", task.id, `env-${this.now().getTime()}.log`);
       mkdirSync(join(this.config.artifactRoot, "tasks", task.id), { recursive: true });
       pid = this.effects.env.start(task.worktree!, logPath);
-      await this.db.updateLeasePid(ENV_LEASE, pid);
+      await this.db.updateLeasePid(ENV_LEASE, pid, logPath);
       const started = pid;
       // Stop waiting as soon as the process exits: its start script may have failed.
       await waitUntil(async () => (await this.effects.env.isUp()) || !this.effects.env.isRunning(started), this.config.envStartTimeoutMs);

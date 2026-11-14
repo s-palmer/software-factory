@@ -37,6 +37,8 @@ export class DuplicateTicketError extends Error {
   }
 }
 
+export type Lease = { taskId: string | null; pid: number | null; logPath: string | null; acquiredAt: string };
+
 const SCHEMA = `
 CREATE SEQUENCE IF NOT EXISTS event_seq;
 CREATE TABLE IF NOT EXISTS tasks (
@@ -118,6 +120,7 @@ CREATE TABLE IF NOT EXISTS leases (
   pid INTEGER,
   acquired_at TIMESTAMP NOT NULL DEFAULT now()
 );
+ALTER TABLE leases ADD COLUMN IF NOT EXISTS log_path VARCHAR;
 CREATE TABLE IF NOT EXISTS events (
   id BIGINT PRIMARY KEY DEFAULT nextval('event_seq'),
   task_id VARCHAR,
@@ -580,13 +583,21 @@ export class FactoryDb {
     return rows.length > 0;
   }
 
-  async updateLeasePid(resource: string, pid: number): Promise<void> {
-    await this.exec("UPDATE leases SET pid = $1 WHERE resource = $2", [pid, resource]);
+  async updateLeasePid(resource: string, pid: number, logPath: string | null = null): Promise<void> {
+    await this.exec("UPDATE leases SET pid = $1, log_path = $2 WHERE resource = $3", [pid, logPath, resource]);
   }
 
-  async getLease(resource: string): Promise<{ taskId: string | null; pid: number | null } | null> {
-    const [row] = await this.all("SELECT task_id, pid FROM leases WHERE resource = $1", [resource]);
-    return row ? { taskId: row.task_id == null ? null : String(row.task_id), pid: row.pid == null ? null : Number(row.pid) } : null;
+  /** `taskId` null: a person holds it (started from the dashboard or the CLI). */
+  async getLease(resource: string): Promise<Lease | null> {
+    const [row] = await this.all("SELECT task_id, pid, log_path, CAST(acquired_at AS VARCHAR) AS acquired_at FROM leases WHERE resource = $1", [resource]);
+    return row
+      ? {
+          taskId: row.task_id == null ? null : String(row.task_id),
+          pid: row.pid == null ? null : Number(row.pid),
+          logPath: row.log_path == null ? null : String(row.log_path),
+          acquiredAt: String(row.acquired_at),
+        }
+      : null;
   }
 
   async releaseLease(resource: string): Promise<void> {

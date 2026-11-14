@@ -55,6 +55,11 @@ class Fakes implements Effects {
   async createWorktree(task: Task) {
     return { branch: `factory/${task.id.slice(0, 8)}`, worktree: `/tmp/wt/${task.id}` };
   }
+  issuesRead: string[] = [];
+  async fetchIssue(_cwd: string, key: string) {
+    this.issuesRead.push(key);
+    return { title: `Issue ${key} title`, body: "Issue body", url: `https://github.com/o/r/issues/${key.slice(1)}`, comments: ["alice: please hurry"] };
+  }
   fileExists(_w: string, path: string) {
     return this.files.has(path);
   }
@@ -224,6 +229,36 @@ describe("happy path", () => {
     fakes.script("scoping", { ...DEFAULTS.scoping, needsBrowser: false });
     const task = await newTask();
     expect(await drive(task.id)).not.toContain("browser_check");
+  });
+});
+
+describe("tickets", () => {
+  it("reads a GitHub issue once at the start and puts it in every prompt", async () => {
+    const task = await newTask({ ticketKey: "#7", title: "#7" });
+    await drive(task.id);
+    expect(fakes.issuesRead).toEqual(["#7"]);
+    expect((await get(task.id)).context.ticket).toMatchObject({ title: "Issue #7 title", comments: ["alice: please hurry"] });
+    for (const c of fakes.calls.filter((call) => call.phase !== "decider")) expect(c.prompt).toContain("Issue body");
+  });
+
+  it("leaves a ticket behind MCP to the agents, with the tracker's tools", async () => {
+    make({ tracker: { label: "Jira", name: "jira", server: { type: "http", url: "https://example.test/mcp" }, tools: ["getJiraIssue"], instructions: "Use getJiraIssue." } });
+    const task = await newTask({ ticketKey: "LI-9", title: "LI-9" });
+    await drive(task.id);
+    expect(fakes.issuesRead).toEqual([]);
+    const scoping = fakes.calls.find((c) => c.phase === "scoping")!;
+    expect(scoping.prompt).toContain("Jira ticket LI-9. Use getJiraIssue.");
+    expect(scoping.call.allowedTools).toContain("mcp__jira__getJiraIssue");
+  });
+
+  it("sandboxes agent runs to the task's worktree", async () => {
+    make({ isolation: { repo: "/code/app", home: "/fh", skillsDir: "/factory/skills", allowedDomains: [], allowRead: [] } });
+    const task = await newTask();
+    await drive(task.id);
+    const s = fakes.calls.find((c) => c.prompt.startsWith("# Phase: implement"))!.call.settings as { sandbox: { filesystem: { allowRead: string[]; denyRead: string[] } }; hooks: unknown };
+    expect(s.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([`/fh/worktrees/${task.id}`, "/code/app/.git"]));
+    expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(["/fh", "/code/app"]));
+    expect(s.hooks).toBeDefined();
   });
 });
 

@@ -5,7 +5,7 @@ This file holds the rules every agent working on the factory's own code must fol
 ## Commands
 
 ```sh
-pnpm factory:seed --reset   # fresh dev DB (data/factory.duckdb) with a demo task + screenshots from artifacts/
+pnpm factory:seed --reset   # fresh dev DB (~/.factory/<repo>/factory.duckdb) with a demo task + screenshots from its artifacts/
 pnpm factory:server         # factory API (Hono + DuckDB) on :8787, serves /api and /artifacts
 pnpm dev                    # dashboard on http://localhost:5173 (proxies /api to :8787), verification at /verify
 pnpm verify       # the gate: lint → typecheck → unit tests → browser tests. Must pass before any handoff.

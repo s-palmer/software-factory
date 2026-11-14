@@ -103,6 +103,8 @@ export interface TaskContext {
   escalation?: string;
   escalatedFrom?: TaskStatus;
   envWait?: string;
+  /** The GitHub issue, read by the factory when the task starts. Trackers behind MCP are read by the agents. */
+  ticket?: { title: string; body: string; url: string; comments: string[] };
 }
 
 export interface Task extends TaskSummary {
@@ -257,3 +259,35 @@ export interface RunDetail {
   /** Tail of the runner's combined stdout/stderr. */
   log: string;
 }
+
+/** The local environment the browser check uses, and who holds it (`GET /api/env`). */
+export interface EnvStatus {
+  /** A start command is set in the config. */
+  configured: boolean;
+  command: string | null;
+  url: string;
+  healthUrls: string[];
+  /** Every health URL answers. */
+  up: boolean;
+  lease: {
+    holder: "task" | "person";
+    taskId: string | null;
+    ticketKey: string | null;
+    title: string | null;
+    status: string | null;
+    pid: number | null;
+    /** The process the factory started is still alive. */
+    running: boolean;
+    acquiredAt: string;
+    logPath: string | null;
+  } | null;
+  /** The app answers but the factory did not start it. Browser checks wait until it stops. */
+  external: boolean;
+  /** Who listens on the health URLs' ports, when `external`. */
+  portHolders: Array<{ port: number; pid: number; command: string }>;
+  /** Tasks waiting for the environment, with why. */
+  waiting: Array<{ taskId: string; ticketKey: string | null; title: string; reason: string }>;
+  /** The end of the holder's log. */
+  log: string;
+}
+

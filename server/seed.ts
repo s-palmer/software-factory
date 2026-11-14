@@ -7,10 +7,10 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TaskStatus } from "../shared/lifecycle";
 import { DEFAULT_PHASE_MODELS, MODELS, modelFor, type Phase, type PhaseModels } from "../shared/models";
+import { factoryPaths } from "./config";
 import { FactoryDb } from "./db";
 
-const dbPath = process.env.FACTORY_DB ?? "data/factory.duckdb";
-const artifactDir = process.env.FACTORY_ARTIFACTS ?? "artifacts";
+const { db: dbPath, artifacts: artifactDir } = factoryPaths();
 
 if (process.argv.includes("--reset")) {
   for (const f of [dbPath, `${dbPath}.wal`]) rmSync(f, { force: true });

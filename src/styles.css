@@ -187,3 +187,21 @@ button.primary:not(:disabled), .run-tests:not(:disabled) { background: #0b5cad; 
 .orchestrator__state[data-state="on"] { background: #dcf5e3; color: #1a7f37; }
 .orchestrator__state[data-state="not available"] { background: #fde2e1; color: #a40e26; }
 .orchestrator .error { margin: 0; }
+
+/* ---- Local environment ---- */
+.env { background: #fff; border: 1px solid #e3e6ea; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.env__head { display: flex; align-items: center; gap: 12px; }
+.env__head h2 { margin: 0; font-size: 18px; }
+.env__up { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #eef1f5; color: #555; }
+.env__up[data-up="true"] { background: #dcf5e3; color: #1a7f37; }
+.env__holder { margin: 0; }
+.env__holder[data-state="external"] { color: #9a6700; }
+.env__config { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.env__config dt { color: #555; }
+.env__config dd { margin: 0; }
+.env__waiting h3 { margin: 0 0 4px; font-size: 14px; }
+.env__waiting ul { margin: 0; padding-left: 20px; font-size: 13px; }
+.env__actions { display: flex; gap: 8px; }
+.env__message { margin: 0; }
+.env__log { margin: 0; max-height: 320px; overflow: auto; background: #0d1117; color: #e6edf3; padding: 12px; border-radius: 6px; font-size: 12px; }
+
