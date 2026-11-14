@@ -166,4 +166,8 @@ pnpm verify                  # lint, type check (TypeScript 7, the native compil
 pnpm factory:seed --reset    # a dev database with a demo task
 ```
 
-Rules for people and agents working on this code are in `claude.md`. This repository has its own `factory.config.json`, so the factory can work on itself.
+Rules for people and agents working on this code are in `claude.md`. This repository has its own `factory.config.json`, so the factory can work on itself. To report a security problem, see [SECURITY.md](SECURITY.md).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The bundled skills in `.claude/skills/` are Matt Pocock's, also MIT.
