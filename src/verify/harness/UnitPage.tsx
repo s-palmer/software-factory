@@ -21,12 +21,18 @@ export function UnitPage({ unitId, fixtureId }: { unitId: string; fixtureId: str
     const run: { cancelled: boolean; unmount?: () => void } = { cancelled: false };
     const started = performance.now();
     setCurrentResult(null);
+    // Each run mounts into its own element, so a second run (StrictMode runs effects twice in dev) never shares a
+    // React root with the first. The mount starts after the effect returns, because flushSync cannot run inside one.
+    const host = document.createElement("div");
+    container.appendChild(host);
 
-    mountFixture(unit, fixture, container)
+    Promise.resolve()
+      .then(() => (run.cancelled ? null : mountFixture(unit, fixture, host)))
       .then(async (m) => {
+        if (!m) return;
         run.unmount = m.unmount;
         if (run.cancelled) return m.unmount();
-        const r = await verifyMounted(unit, fixture, container, started);
+        const r = await verifyMounted(unit, fixture, host, started);
         if (run.cancelled) return;
         setResult(r);
         setCurrentResult(r);
@@ -51,6 +57,7 @@ export function UnitPage({ unitId, fixtureId }: { unitId: string; fixtureId: str
     return () => {
       run.cancelled = true;
       run.unmount?.();
+      host.remove();
     };
   }, [unit, fixture, unitId, fixtureId]);
 

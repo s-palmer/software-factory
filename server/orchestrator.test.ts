@@ -504,7 +504,8 @@ describe("the decider", () => {
     const after = await get(task.id);
     expect(after).toMatchObject({ status: "design", attempts: 0 });
     expect(after.context.escalation).toBeUndefined();
-    expect((await db.listAgentRuns(task.id))[0]).toMatchObject({ stage: "design", status: "error", summary: expect.stringContaining("Stopped by a person") });
+    // Runs can share a start time, so find the design run instead of taking the newest.
+    expect((await db.listAgentRuns(task.id)).find((r) => r.stage === "design")).toMatchObject({ status: "error", summary: expect.stringContaining("Stopped by a person") });
 
     await db.updateTask(task.id, { context: { steering: [{ note: "Keep the old URL", by: "human", at: "2026-11-14T12:00:00Z" }] } });
     expect((await drive(task.id)).at(-1)).toBe("done");
@@ -867,8 +868,12 @@ describe("failures and the loop", () => {
       return claude(call, opts);
     };
     const tick = orch.tick();
-    await new Promise((r) => setTimeout(r, 50));
-    const waiting = [await get(a.id), await get(b.id)].find((t) => t.context.envWait);
+    // Wait until one task records that it waits, rather than for a fixed time.
+    let waiting: Task | undefined;
+    for (let i = 0; i < 200 && !waiting; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      waiting = [await get(a.id), await get(b.id)].find((t) => t.context.envWait);
+    }
     expect(waiting?.context.envWait).toMatch(/Another task is using the local app/);
     release();
     await tick;

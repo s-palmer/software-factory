@@ -139,7 +139,10 @@ describe("git and the gate, against a real repository", () => {
         log.push(`end ${name}`);
       });
     await Promise.all([use("a"), use("b")]);
-    expect(log).toEqual(["start a", "end a", "start b", "end b"]);
+    // Either may go first; the two uses must not overlap.
+    const first = log[0]!.slice(6);
+    const second = first === "a" ? "b" : "a";
+    expect(log).toEqual([`start ${first}`, `end ${first}`, `start ${second}`, `end ${second}`]);
   });
 
   it("reinstalls the base checkout when the install command changes, not on every use", async () => {
