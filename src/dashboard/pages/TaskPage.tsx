@@ -13,6 +13,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { formatCost } from "../components/TaskTable";
 import { TaskNotes } from "../components/TaskNotes";
 import { WaitingFor } from "../components/WaitingFor";
+import { formatFull, formatWhen } from "../time";
 
 const DECISION_LABEL = { approve: "Retried the stage", request_changes: "Requested changes", comment: "Commented" } as const;
 
@@ -161,7 +162,7 @@ export function TaskPage({ id }: { id: string }) {
                 <li key={f.id} className="history__feedback" data-decision={f.decision}>
                   <strong>{DECISION_LABEL[f.decision]}</strong>
                   {f.artifactId && <> on <em>{artifactLabel(f.artifactId) ?? "a screenshot"}</em></>}
-                  {f.comment && <>: “{f.comment}”</>} <time dateTime={f.createdAt}>{f.createdAt.replace("T", " ")}</time>
+                  {f.comment && <>: “{f.comment}”</>} <time dateTime={f.createdAt} title={formatFull(f.createdAt)}>{formatWhen(f.createdAt)}</time>
                 </li>
               ))}
               {events
@@ -171,7 +172,7 @@ export function TaskPage({ id }: { id: string }) {
                     {e.type === "models_changed"
                       ? `Models: ${describeModelChange(e.payload.from, e.payload.to)}`
                       : `Moved ${String(e.payload.from).replaceAll("_", " ")} → ${String(e.payload.to).replaceAll("_", " ")}`}{" "}
-                    <time dateTime={e.ts}>{e.ts.replace("T", " ")}</time>
+                    <time dateTime={e.ts} title={formatFull(e.ts)}>{formatWhen(e.ts)}</time>
                   </li>
                 ))}
             </ol>

@@ -1,6 +1,7 @@
 import type { AgentRun } from "../../../shared/api";
 import { statusLabel } from "../../../shared/lifecycle";
 import { verifyAttrs } from "../../verify/core/contract";
+import { formatFull, formatWhen } from "../time";
 
 export interface AgentRunListProps {
   runs: AgentRun[];
@@ -43,7 +44,7 @@ export function AgentRunList({ runs }: AgentRunListProps) {
                 <dd className="agent-run__turns">{r.turns}</dd>
                 <dt>Started</dt>
                 <dd>
-                  <time dateTime={r.startedAt}>{r.startedAt.replace("T", " ")}</time>
+                  <time dateTime={r.startedAt} title={formatFull(r.startedAt)}>{formatWhen(r.startedAt)}</time>
                 </dd>
               </dl>
               {r.summary && <p className="agent-run__summary">{r.summary}</p>}

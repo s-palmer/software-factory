@@ -20,7 +20,7 @@ export function basicAuthPlugin(password: string | undefined): Plugin {
   const middleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     if (password && isAuthorized(req.headers.authorization, DASHBOARD_USER, password)) return next();
     res.statusCode = 401;
-    res.setHeader("WWW-Authenticate", 'Basic realm="Software Factory", charset="UTF-8"');
+    res.setHeader("WWW-Authenticate", 'Basic realm="Simple Software Factory", charset="UTF-8"');
     res.end("Authentication required");
   };
   return {

@@ -17,6 +17,8 @@ export default defineConfig({
   preview: { port: 4173, strictPort: true, proxy, allowedHosts },
   test: {
     environment: "jsdom",
+    // Browsers have Temporal; Node 24 does not, so the tests load a polyfill.
+    setupFiles: ["./src/test-setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "server/**/*.test.ts", "shared/**/*.test.ts", "cli/**/*.test.ts"],
   },
 });

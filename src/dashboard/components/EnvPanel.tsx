@@ -1,5 +1,6 @@
 import type { EnvStatus } from "../../../shared/api";
 import { verifyAttrs } from "../../verify/core/contract";
+import { formatWhen } from "../time";
 
 export interface EnvPanelProps {
   /** null while loading. */
@@ -40,14 +41,14 @@ export function EnvPanel({ status, onStart, onStop, busy = false, message }: Env
               <>
                 Running for task{" "}
                 <a href={`/tasks/${encodeURIComponent(lease.taskId ?? "")}`}>{lease.ticketKey ? `${lease.ticketKey} ${lease.title ?? ""}` : (lease.title ?? lease.taskId)}</a>
-                {lease.status ? ` (${lease.status.replace(/_/g, " ")})` : ""}, since {lease.acquiredAt.slice(0, 19)}
+                {lease.status ? ` (${lease.status.replace(/_/g, " ")})` : ""}, since {formatWhen(lease.acquiredAt)}
                 {lease.pid !== null ? `, pid ${lease.pid}` : ""}
                 {!lease.running && lease.pid !== null ? ". The process has exited" : ""}
               </>
             )}
             {state === "person" && lease && (
               <>
-                Started by a person from the repository checkout, since {lease.acquiredAt.slice(0, 19)}
+                Started by a person from the repository checkout, since {formatWhen(lease.acquiredAt)}
                 {lease.pid !== null ? `, pid ${lease.pid}` : ""}
                 {!lease.running ? ". The process has exited" : ""}
               </>

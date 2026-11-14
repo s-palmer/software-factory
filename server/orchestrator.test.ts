@@ -248,7 +248,7 @@ describe("happy path", () => {
     await drive(task.id);
     const body = fakes.prBodies[0]!;
     expect(body.match(/Generated with \[Claude Code\]/g)).toHaveLength(1);
-    expect(body).toContain("## Software factory");
+    expect(body).toContain("## Simple Software Factory");
     expect(body).toContain("- Risk: Normal");
     expect(body).toContain("Paginate later");
   });

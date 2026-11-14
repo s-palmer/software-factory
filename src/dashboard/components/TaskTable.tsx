@@ -1,6 +1,9 @@
 import type { TaskSummary } from "../../../shared/api";
 import { AWAITING_HUMAN } from "../../../shared/lifecycle";
 import { verifyAttrs } from "../../verify/core/contract";
+import { formatDuration, formatFull, formatWhen } from "../time";
+
+export { formatDuration };
 import { PipelineProgress } from "./PipelineProgress";
 import { StatusBadge } from "./StatusBadge";
 import { WaitingFor, pendingBlockers } from "./WaitingFor";
@@ -10,6 +13,7 @@ export interface TaskTableProps {
 }
 
 export const formatCost = (usd: number) => `$${usd.toFixed(2)}`;
+
 
 export function TaskTable({ tasks }: TaskTableProps) {
   const awaiting = tasks.filter((t) => AWAITING_HUMAN.has(t.status)).length;
@@ -27,9 +31,9 @@ export function TaskTable({ tasks }: TaskTableProps) {
               <th scope="col">Task</th>
               <th scope="col">Status</th>
               <th scope="col">Progress</th>
-              <th scope="col">Attempts</th>
+              <th scope="col" title="Failed attempts in the current round">Tries</th>
               <th scope="col">Cost</th>
-              <th scope="col">Screenshots</th>
+              <th scope="col" title="From the task's start until its pull request was ready">Time</th>
               <th scope="col">Updated</th>
             </tr>
           </thead>
@@ -50,9 +54,12 @@ export function TaskTable({ tasks }: TaskTableProps) {
                 </td>
                 <td className="task-table__attempts">{t.attempts}</td>
                 <td className="task-table__cost">{formatCost(t.costUsd)}</td>
-                <td>{t.screenshotCount}</td>
-                <td>
-                  <time dateTime={t.updatedAt}>{t.updatedAt.replace("T", " ")}</time>
+                <td className="task-table__time" data-final={t.durationFinal}>
+                  {formatDuration(t.durationSec)}
+                  {t.durationFinal === false && <span className="task-table__so-far"> so far</span>}
+                </td>
+                <td className="task-table__updated">
+                  <time dateTime={t.updatedAt} title={formatFull(t.updatedAt)}>{formatWhen(t.updatedAt)}</time>
                 </td>
               </tr>
             ))}

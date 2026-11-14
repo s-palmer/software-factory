@@ -39,6 +39,18 @@ export class DuplicateTicketError extends Error {
 
 export type Lease = { taskId: string | null; pid: number | null; logPath: string | null; acquiredAt: string };
 
+/**
+ * How long the factory worked on a task, in one clock (the database's): from creation to the first time its PR was
+ * ready; for an escalated or finished task without one, to its last update; otherwise to now.
+ */
+const DURATION_COLUMNS = `
+  epoch(coalesce(
+    (SELECT min(e.ts) FROM events e WHERE e.task_id = t.id AND e.type = 'pr_ready'),
+    CASE WHEN t.status IN ('escalated', 'done') THEN t.updated_at END,
+    now()::TIMESTAMP
+  ) - t.created_at) AS duration_sec,
+  ((SELECT count(*) FROM events e WHERE e.task_id = t.id AND e.type = 'pr_ready') > 0 OR t.status IN ('escalated', 'done')) AS duration_final`;
+
 const SCHEMA = `
 CREATE SEQUENCE IF NOT EXISTS event_seq;
 CREATE TABLE IF NOT EXISTS tasks (
@@ -269,7 +281,8 @@ export class FactoryDb {
   async listTasks(): Promise<TaskSummary[]> {
     const rows = await this.all(`
       SELECT t.id, t.title, t.ticket_key, t.status, t.attempts, ${DEPS_COLUMNS}, t.cost_usd, strftime(t.updated_at, '%Y-%m-%dT%H:%M:%S') AS updated_at,
-             (SELECT count(*) FROM artifacts a WHERE a.task_id = t.id AND a.kind = 'screenshot')::INTEGER AS screenshot_count
+             (SELECT count(*) FROM artifacts a WHERE a.task_id = t.id AND a.kind = 'screenshot')::INTEGER AS screenshot_count,
+             ${DURATION_COLUMNS}
       FROM tasks t ORDER BY t.updated_at DESC, t.created_at DESC, t.id`);
     return rows.map(toSummary);
   }
@@ -277,7 +290,8 @@ export class FactoryDb {
   async getTask(id: string): Promise<Task | null> {
     const [row] = await this.all(
       `SELECT t.* REPLACE (strftime(t.created_at, '%Y-%m-%dT%H:%M:%S') AS created_at, strftime(t.updated_at, '%Y-%m-%dT%H:%M:%S') AS updated_at), ${DEPS_COLUMNS},
-              (SELECT count(*) FROM artifacts a WHERE a.task_id = t.id AND a.kind = 'screenshot')::INTEGER AS screenshot_count
+              (SELECT count(*) FROM artifacts a WHERE a.task_id = t.id AND a.kind = 'screenshot')::INTEGER AS screenshot_count,
+              ${DURATION_COLUMNS}
        FROM tasks t WHERE t.id = $1`,
       [id],
     );
@@ -734,6 +748,8 @@ function toSummary(r: Row): TaskSummary {
     ready: Boolean(r.ready),
     screenshotCount: Number(r.screenshot_count ?? 0),
     updatedAt: String(r.updated_at),
+    durationSec: Math.max(0, Math.round(Number(r.duration_sec ?? 0))),
+    durationFinal: Boolean(r.duration_final),
   };
 }
 

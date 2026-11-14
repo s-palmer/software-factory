@@ -27,6 +27,8 @@ export const task = (id: string, title: string, status: TaskSummary["status"], e
   costUsd: 0,
   screenshotCount: 0,
   updatedAt: "2026-11-06T10:00:00",
+  durationSec: 0,
+  durationFinal: status === "done" || status === "escalated" || status === "awaiting_merge",
   ...extra,
 });
 

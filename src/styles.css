@@ -9,7 +9,7 @@ body { margin: 0; padding: 16px; }
 
 /* ---- Dashboard ---- */
 body { padding: 0; }
-main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+main { padding: 16px; max-width: 1400px; margin: 0 auto; }
 a { color: #0b5cad; }
 .topbar { display: flex; gap: 16px; align-items: center; padding: 12px 16px; background: #1f2937; }
 .topbar a { color: #fff; text-decoration: none; }
@@ -30,7 +30,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .task-table { overflow-x: auto; }
 .task-table table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
 .task-table th, .task-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
-.task-table__title { overflow-wrap: anywhere; }
+/* A title wraps between words, and the column keeps room for a readable line instead of shrinking to a few letters. */
+.task-table__title { min-width: 16rem; overflow-wrap: break-word; }
+.task-table__time, .task-table__updated, .task-table__attempts { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-table__so-far { color: #777; }
 .needs-you { margin-left: 8px; font-size: 11px; background: #fff3c4; color: #7a5b00; padding: 1px 6px; border-radius: 999px; }
 .status-badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #eef1f5; color: #333; white-space: nowrap; }
 .status-badge[data-awaiting="true"] { background: #fff3c4; color: #7a5b00; }

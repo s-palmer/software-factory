@@ -741,9 +741,9 @@ export function factoryFooter(task: Task): string {
   const c = task.context;
   const risk = !c.risk ? "Not checked." : c.risk.level === "high" ? `High:\n${c.risk.reasons.map((r) => `  - ${r}`).join("\n")}` : "Normal. No protected path changed.";
   return [
-    "## Software factory",
+    "## Simple Software Factory",
     "",
-    `The software factory raised this pull request for task \`${task.id}\`${task.ticketKey ? ` (${task.ticketKey})` : ""}. The orchestrator compared lint, type errors and the changed tests with the merge base and found nothing new. It marks the PR ready for review once CI is green; it never merges.`,
+    `The Simple Software Factory raised this pull request for task \`${task.id}\`${task.ticketKey ? ` (${task.ticketKey})` : ""}. The orchestrator compared lint, type errors and the changed tests with the merge base and found nothing new. It marks the PR ready for review once CI is green; it never merges.`,
     "",
     `- Risk: ${risk}`,
     ...(Object.keys(task.phaseModels).length ? [`- Model overrides: ${Object.entries(task.phaseModels).map(([p, m]) => `${p} ${m}`).join(", ")}`] : []),

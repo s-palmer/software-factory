@@ -1,4 +1,4 @@
-# Software factory: rules for agents
+# Simple Software Factory: rules for agents
 
 Every agent that works on the factory's own code follows these rules. Keep the file short. `README.md` explains what the factory does and how to run it, and `docs/INTERFACE.md` is the contract for agents that drive it.
 

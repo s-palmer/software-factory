@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { z } from "zod";
 import { TaskStatusSchema } from "../../../shared/api";
 import { AWAITING_HUMAN } from "../../../shared/lifecycle";
-import { TaskTable, type TaskTableProps } from "../../dashboard/components/TaskTable";
+import { formatDuration, TaskTable, type TaskTableProps } from "../../dashboard/components/TaskTable";
 import { registerUnit } from "../core/registry";
 import { task } from "./fixtures";
 
@@ -25,6 +25,8 @@ registerUnit<TaskTableProps>({
         ready: z.boolean(),
         screenshotCount: z.number().int().nonnegative(),
         updatedAt: z.string(),
+        durationSec: z.number().nonnegative(),
+        durationFinal: z.boolean(),
       }),
     ),
   }),
@@ -34,14 +36,20 @@ registerUnit<TaskTableProps>({
       description: "Tasks across the pipeline, one escalated.",
       props: {
         tasks: [
-          task("a", "Add login page", "escalated", { ticketKey: "#7", screenshotCount: 4, attempts: 3, costUsd: 4.567 }),
+          task("a", "Add login page", "escalated", { ticketKey: "#7", screenshotCount: 4, attempts: 3, costUsd: 4.567, durationSec: 3 * 3600 + 5 * 60 + 9 }),
           task("b", "Fix nav overflow", "implementing", { ticketKey: "#9", attempts: 1, costUsd: 0.5 }),
           task("c", "Scope billing", "scoping", { costUsd: 0.1 }),
-          task("d", "Write README", "done", { screenshotCount: 1, costUsd: 1.2 }),
+          task("d", "Write README", "done", { screenshotCount: 1, costUsd: 1.2, durationSec: 38 * 60 + 40 }),
           task("e", "Tidy spacing", "reviewing", { attempts: 2 }),
           task("f", "Fix typo", "browser_check"),
         ],
       },
+    },
+    {
+      id: "running-time",
+      probe: true,
+      description: "Probe: a task still in progress shows its time so far; a long one shows days and hours.",
+      props: { tasks: [task("r", "Paginate the list", "implementing", { durationSec: 754, durationFinal: false }), task("l", "Big refactor", "awaiting_merge", { durationSec: 2 * 86400 + 3 * 3600 })] },
     },
     { id: "empty", probe: true, description: "Probe: no tasks shows an empty state, not an empty table.", props: { tasks: [] } },
     {
@@ -83,7 +91,7 @@ registerUnit<TaskTableProps>({
   invariants: [
     {
       id: "row-cells-match-task",
-      description: "Each row shows the task's ticket, status, attempts and cost to 2 decimals",
+      description: "Each row shows the task's ticket, status, attempts, cost to 2 decimals, and its time (marked 'so far' while it runs)",
       check: ({ root, props }) => {
         const rows = Array.from(root.querySelectorAll<HTMLElement>("tbody tr"));
         const bad = props.tasks.filter((t, i) => {
@@ -95,7 +103,8 @@ registerUnit<TaskTableProps>({
             row.querySelector(".status-badge")?.getAttribute("data-status") !== t.status ||
             row.querySelector(".task-table__attempts")?.textContent !== String(t.attempts) ||
             !/^\$\d+\.\d\d$/.test(cost) ||
-            cost !== `$${t.costUsd.toFixed(2)}`
+            cost !== `$${t.costUsd.toFixed(2)}` ||
+            row.querySelector(".task-table__time")?.textContent !== formatDuration(t.durationSec) + (t.durationFinal === false ? " so far" : "")
           );
         });
         return bad.length === 0 || `wrong rows: ${bad.map((t) => t.id).join(",")}`;

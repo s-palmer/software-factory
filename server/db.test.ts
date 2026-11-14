@@ -75,3 +75,17 @@ describe("migrations", () => {
     }
   });
 });
+
+describe("task duration", () => {
+  it("counts from creation until the PR was first ready, and keeps counting until then", async () => {
+    const task = await db.createTask({ title: "x", description: "" });
+    let [row] = await db.listTasks();
+    expect(row).toMatchObject({ durationFinal: false });
+    expect(row!.durationSec).toBeLessThan(5);
+    await db.recordEvent(task.id, "pr_ready", { pr: 1 });
+    [row] = await db.listTasks();
+    expect(row).toMatchObject({ durationFinal: true });
+    expect((await db.getTask(task.id))!.durationFinal).toBe(true);
+  });
+});
+

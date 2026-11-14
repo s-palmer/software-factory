@@ -7,7 +7,7 @@ This is for whoever builds the product-manager or orchestrator agent, and the me
 ```mermaid
 flowchart LR
     PM["PM / orchestrator agent<br/>(yours)"]
-    F["Software factory<br/>runs on its own, no person in the loop"]
+    F["Simple Software Factory<br/>runs on its own, no person in the loop"]
     GH[("GitHub<br/>PRs, CI")]
     M["Merge agent<br/>(yours)"]
 
@@ -151,7 +151,7 @@ On GitHub, a factory pull request:
 
 - starts as a draft. Ignore it until the factory marks it ready;
 - is marked ready for review when CI is green and the factory has nothing left to fix. The factory adds no labels; the risk level is in the footer and in the `pr_ready` event;
-- has a "Software factory" footer in its body: the task id, the ticket, the risk and its reasons, the cost, the decider's decisions, the criteria not checked in the browser and the follow-ups;
+- has a "Simple Software Factory" footer in its body: the task id, the ticket, the risk and its reasons, the cost, the decider's decisions, the criteria not checked in the browser and the follow-ups;
 - goes back to draft whenever the factory pushes again (a fix, or a resolved conflict), and is marked ready again once CI is green.
 
 What the merge agent can do:

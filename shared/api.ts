@@ -72,6 +72,13 @@ export interface TaskSummary {
   ready: boolean;
   screenshotCount: number;
   updatedAt: string;
+  /**
+   * Seconds the factory has worked on the task: from its creation until its pull request was first ready. For an
+   * escalated task, until it escalated; for a task still in progress, until now.
+   */
+  durationSec: number;
+  /** The duration is final (the PR was ready, or the task escalated or is done); false while it still grows. */
+  durationFinal: boolean;
 }
 
 /** Working state the orchestrator keeps per task. */

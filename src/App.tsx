@@ -26,7 +26,7 @@ export function App() {
   return (
     <>
       <nav className="topbar">
-        <a href="/" className="topbar__brand">Software Factory</a>
+        <a href="/" className="topbar__brand">Simple Software Factory</a>
         <a href="/">Tasks</a>
         <a href="/env">Environment</a>
         <a href="/models">Models</a>
